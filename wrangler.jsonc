@@ -1,0 +1,33 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "uptime-monitor",
+	"main": "./bootstrap/worker.ts",
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "uptime-db",
+			"database_id": "7c1aab67-5810-4af6-bf5d-d8bd164dc76f",
+			"migrations_dir": "./database/migrations"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "823f05e1cfef44e08dc6a1b1233dc1ec"
+		}
+	],
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
+	"vars": {
+		"APP_ENV": "development",
+		"APP_URL": "http://localhost:8787",
+		"MAIL_FROM": "alerts@uptime.local",
+		"SESSION_SECRET": "uptime-monitor-session-secret-at-least-32-chars-long"
+	},
+	"observability": {
+		"enabled": true
+	}
+}

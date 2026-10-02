@@ -1,0 +1,40 @@
+{
+	"name": "uptime-monitor",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "cf dev",
+		"build": "vite build",
+		"deploy": "cf deploy",
+		"typecheck": "tsc --noEmit",
+		"db:local:migrate": "cf d1 migrations apply uptime-db --local",
+		"db:remote:migrate": "cf d1 migrations apply uptime-db"
+	},
+	"dependencies": {
+		"@sdxc/cache": "^2026.10.2",
+		"@sdxc/crypto": "^2026.10.2",
+		"@sdxc/data-table-d1": "^2026.10.2",
+		"@sdxc/duration": "^2026.10.2",
+		"@sdxc/jobs": "^2026.10.2",
+		"@sdxc/json-schema": "^2026.10.2",
+		"@sdxc/lazy-route": "^2026.10.2",
+		"@sdxc/logger": "^2026.10.2",
+		"@sdxc/mail": "^2026.10.2",
+		"@sdxc/mcp": "^2026.10.2",
+		"@sdxc/problem": "^2026.10.2",
+		"@sdxc/result": "^2026.10.2",
+		"@sdxc/types": "^2026.10.2",
+		"remix": "^3.0.0"
+	},
+	"devDependencies": {
+		"@cloudflare/config": "^0.23.0",
+		"@cloudflare/vite-plugin": "^1.62.5",
+		"@cloudflare/workers-types": "^4.20250214.0",
+		"@types/node": "^22.13.0",
+		"cf": "^1.0.0-beta.12",
+		"typescript": "^5.7.3",
+		"vite": "^6.2.0",
+		"wrangler": "^3.111.0"
+	}
+}
