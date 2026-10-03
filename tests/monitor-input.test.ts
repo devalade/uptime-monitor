@@ -22,7 +22,8 @@ describe("monitor input", () => {
 	test("rejects non-http URLs such as javascript:", () => {
 		const result = parseMonitorInput({ url: "javascript:alert(1)" });
 		assert.ok(!result.ok);
-		assert.match(result.errors.url!, /http/);
+		assert.ok(result.errors.url);
+		assert.match(result.errors.url, /http/);
 	});
 
 	test("reports every bad field at once", () => {

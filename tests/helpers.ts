@@ -62,7 +62,7 @@ export function stubFetch(options: { site?: Responder[]; webhookUrl?: string; we
 		}
 
 		probes.push(recorded);
-		const respond = siteResponses.length > 1 ? siteResponses.shift()! : siteResponses[0];
+		const respond = siteResponses.length > 1 ? siteResponses.shift() : siteResponses[0];
 		if (!respond) throw new Error(`Unexpected fetch to ${recorded.url}`);
 		return respond(recorded);
 	}) as typeof fetch;

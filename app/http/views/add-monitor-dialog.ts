@@ -16,8 +16,10 @@ export function renderAddMonitorDialog(form?: AddMonitorFormState): string {
 	const values = form?.values ?? {};
 	const errors = form?.errors ?? {};
 	const value = (field: keyof MonitorFormValues, fallback = "") => escapeHtml(values[field] || fallback);
-	const error = (field: keyof MonitorFormErrors) =>
-		errors[field] ? `<p class="form-error" id="${field}-error">${escapeHtml(errors[field]!)}</p>` : "";
+	const error = (field: keyof MonitorFormErrors) => {
+		const message = errors[field];
+		return message ? `<p class="form-error" id="${field}-error">${escapeHtml(message)}</p>` : "";
+	};
 	const invalid = (field: keyof MonitorFormErrors) =>
 		errors[field] ? `aria-invalid="true" aria-describedby="${field}-error"` : "";
 

@@ -4,17 +4,12 @@
  */
 
 import { createAction } from "remix/router";
-import { requireDatabase } from "~/app/http/context";
 import { deleteMonitor } from "~/app/services/monitor-service";
 import routes from "~/routes/web";
 
 export default createAction(routes.deleteMonitor, async (ctx) => {
-	const db = requireDatabase(ctx);
-	const id = (ctx as any).params?.id;
-
-	if (!id) {
-		return new Response("Monitor ID required", { status: 400 });
-	}
+	const db = ctx.db;
+	const id = ctx.params.id;
 
 	await deleteMonitor(db, id);
 

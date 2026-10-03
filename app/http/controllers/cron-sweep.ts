@@ -4,13 +4,12 @@
  */
 
 import { createAction } from "remix/router";
-import { AlertsKey, requireDatabase } from "~/app/http/context";
 import { runSweep } from "~/app/services/monitor-service";
 import apiRoutes from "~/routes/api";
 
 export default createAction(apiRoutes.sweep, async (ctx) => {
-	const db = requireDatabase(ctx);
-	const { swept, failed } = await runSweep(db, ctx.get(AlertsKey));
+	const db = ctx.db;
+	const { swept, failed } = await runSweep(db, ctx.alerts);
 
 	return Response.json({ swept, successful: swept - failed, failed });
 });

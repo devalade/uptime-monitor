@@ -41,9 +41,10 @@ export interface AlertDelivery {
 }
 
 export async function sendIncidentAlert(alerts: AlertSettings, payload: IncidentAlertPayload): Promise<AlertDelivery[]> {
+	const { email, webhookUrl } = alerts;
 	const deliveries: Promise<AlertDelivery>[] = [];
-	if (alerts.email) deliveries.push(deliver("email", payload, () => sendEmailAlert(alerts.email!, payload)));
-	if (alerts.webhookUrl) deliveries.push(deliver("webhook", payload, () => sendWebhookAlert(alerts.webhookUrl!, payload)));
+	if (email) deliveries.push(deliver("email", payload, () => sendEmailAlert(email, payload)));
+	if (webhookUrl) deliveries.push(deliver("webhook", payload, () => sendWebhookAlert(webhookUrl, payload)));
 	return Promise.all(deliveries);
 }
 

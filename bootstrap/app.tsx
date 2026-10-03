@@ -5,14 +5,14 @@
 
 import { asyncContext } from "remix/middleware/async-context";
 import { renderWith } from "remix/middleware/render";
-import { createRouter } from "remix/router";
+import { createRouter, type RouterContext } from "remix/router";
 import { lazy } from "@sdxc/lazy-route";
 
 import type { AppDatabase } from "~/app/contracts/database";
 import type { Cache } from "~/app/contracts/cache";
 import type { AlertSettings } from "~/app/services/alerting";
 import { adminAuth, type AccessSettings } from "~/app/http/auth";
-import { DatabaseKey, CacheKey, AlertsKey } from "~/app/http/context";
+import { appServices } from "~/app/http/context";
 import { createHtmlRenderer } from "~/app/http/render";
 import webRoutes from "~/routes/web";
 import apiRoutes from "~/routes/api";
@@ -32,31 +32,35 @@ export default function application(options: ApplicationOptions) {
 		middleware: [
 			asyncContext(),
 			adminAuth({ access: options.access }),
-			async (ctx, next) => {
-				ctx.set(DatabaseKey, options.db);
-				ctx.set(CacheKey, options.cache);
-				ctx.set(AlertsKey, options.alerts);
-				return next();
-			},
+			appServices({ db: options.db, cache: options.cache, alerts: options.alerts }),
 			renderWith(createHtmlRenderer),
 		],
 	});
 
 	// Web UI routes (lazy-loaded to avoid cold start overhead)
-	router.map(webRoutes.home, lazy(() => import("~/app/http/controllers/dashboard")) as any);
-	router.map(webRoutes.status, lazy(() => import("~/app/http/controllers/status-page")) as any);
-	router.map(webRoutes.monitor, lazy(() => import("~/app/http/controllers/monitor-detail")) as any);
-	router.map(webRoutes.createMonitor, lazy(() => import("~/app/http/controllers/create-monitor")) as any);
-	router.map(webRoutes.checkMonitor, lazy(() => import("~/app/http/controllers/trigger-check")) as any);
-	router.map(webRoutes.toggleMonitor, lazy(() => import("~/app/http/controllers/toggle-monitor")) as any);
-	router.map(webRoutes.deleteMonitor, lazy(() => import("~/app/http/controllers/delete-monitor")) as any);
-	router.map(webRoutes.toggleVisibility, lazy(() => import("~/app/http/controllers/toggle-visibility")) as any);
-	router.map(webRoutes.testAlert, lazy(() => import("~/app/http/controllers/test-alert")) as any);
+	router.map(webRoutes.home, lazy(() => import("~/app/http/controllers/dashboard")));
+	router.map(webRoutes.status, lazy(() => import("~/app/http/controllers/status-page")));
+	router.map(webRoutes.monitor, lazy(() => import("~/app/http/controllers/monitor-detail")));
+	router.map(webRoutes.createMonitor, lazy(() => import("~/app/http/controllers/create-monitor")));
+	router.map(webRoutes.checkMonitor, lazy(() => import("~/app/http/controllers/trigger-check")));
+	router.map(webRoutes.toggleMonitor, lazy(() => import("~/app/http/controllers/toggle-monitor")));
+	router.map(webRoutes.deleteMonitor, lazy(() => import("~/app/http/controllers/delete-monitor")));
+	router.map(webRoutes.toggleVisibility, lazy(() => import("~/app/http/controllers/toggle-visibility")));
+	router.map(webRoutes.testAlert, lazy(() => import("~/app/http/controllers/test-alert")));
 
 	// API and MCP routes
-	router.map(apiRoutes.mcp, lazy(() => import("~/app/http/controllers/mcp")) as any);
-	router.map(apiRoutes.healthcheck, lazy(() => import("~/app/http/controllers/healthcheck")) as any);
-	router.map(apiRoutes.sweep, lazy(() => import("~/app/http/controllers/cron-sweep")) as any);
+	router.map(apiRoutes.mcp, lazy(() => import("~/app/http/controllers/mcp")));
+	router.map(apiRoutes.healthcheck, lazy(() => import("~/app/http/controllers/healthcheck")));
+	router.map(apiRoutes.sweep, lazy(() => import("~/app/http/controllers/cron-sweep")));
 
 	return router;
+}
+
+/** The request context every controller receives, derived from the middleware above. */
+export type AppContext = RouterContext<ReturnType<typeof application>>;
+
+declare module "remix/router" {
+	interface RouterTypes {
+		context: AppContext;
+	}
 }

@@ -1,6 +1,7 @@
 import { before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { exportJWK, generateKeyPair, SignJWT, type CryptoKey } from "jose";
+import { RequestContext } from "remix/router";
 import { adminAuth } from "~/app/http/auth";
 
 const ISSUER = "https://myteam.cloudflareaccess.com";
@@ -37,7 +38,7 @@ const guarded = adminAuth({ access: { teamDomain: "myteam", audience: AUD } });
 const unconfigured = adminAuth({});
 
 async function status(middleware: ReturnType<typeof adminAuth>, url: string, headers: Record<string, string> = {}) {
-	const response = await middleware({ request: new Request(url, { headers }) }, async () => new Response("ok"));
+	const response = await middleware(new RequestContext(new Request(url, { headers })), async () => new Response("ok"));
 	return response.status;
 }
 

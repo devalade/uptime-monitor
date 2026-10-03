@@ -7,7 +7,7 @@ import { Database } from "remix/data-table";
 import { createD1DatabaseAdapter } from "@sdxc/data-table-d1";
 import { createSqliteDatabase } from "remix/data-table/sqlite";
 
-export type AppDatabase = Database<any>;
+export type AppDatabase = Database;
 
 /**
  * Creates a Database instance backed by Cloudflare D1.

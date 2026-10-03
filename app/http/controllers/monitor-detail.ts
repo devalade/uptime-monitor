@@ -4,18 +4,13 @@
  */
 
 import { createAction } from "remix/router";
-import { requireDatabase } from "~/app/http/context";
 import { getMonitorWithHistory } from "~/app/services/monitor-service";
 import { renderMonitorDetailView } from "~/app/http/views/monitor-detail-view";
 import routes from "~/routes/web";
 
 export default createAction(routes.monitor, async (ctx) => {
-	const db = requireDatabase(ctx);
-	const id = (ctx as any).params?.id;
-
-	if (!id) {
-		return new Response("Monitor ID required", { status: 400 });
-	}
+	const db = ctx.db;
+	const id = ctx.params.id;
 
 	const data = await getMonitorWithHistory(db, id);
 	if (!data) {
@@ -23,5 +18,5 @@ export default createAction(routes.monitor, async (ctx) => {
 	}
 
 	const html = renderMonitorDetailView(data);
-	return (ctx as any).render(html);
+	return ctx.render(html);
 });

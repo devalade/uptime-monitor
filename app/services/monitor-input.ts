@@ -3,7 +3,7 @@
  * Returns field-level errors instead of throwing so callers can show them to the user.
  */
 
-import { httpMethods, type HttpMethod } from "~/database/schema";
+import { httpMethods } from "~/database/schema";
 import type { CreateMonitorInput } from "~/app/services/monitor-service";
 
 /** Cron fires once a minute, so shorter intervals cannot be honoured. */
@@ -44,8 +44,9 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 	const name = values.name?.trim() || (url ? new URL(url).host : "");
 	if (name.length > 100) errors.name = "Name must be 100 characters or fewer.";
 
-	const method = (values.method?.toUpperCase() || "GET") as HttpMethod;
-	if (!httpMethods.includes(method)) errors.method = `Method must be one of ${httpMethods.join(", ")}.`;
+	const requestedMethod = values.method?.toUpperCase() || "GET";
+	const method = httpMethods.find((m) => m === requestedMethod);
+	if (!method) errors.method = `Method must be one of ${httpMethods.join(", ")}.`;
 
 	const expectedStatus = readInteger(values.expected_status, 200);
 	if (expectedStatus === null || expectedStatus < 100 || expectedStatus > 599) {
@@ -67,7 +68,16 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 		errors.degraded_after_ms = "Slow threshold must be between 100 and 30000 ms.";
 	}
 
-	if (Object.keys(errors).length > 0) return { ok: false, errors };
+	if (
+		Object.keys(errors).length > 0 ||
+		!method ||
+		expectedStatus === null ||
+		intervalSeconds === null ||
+		timeoutSeconds === null ||
+		degradedAfterMs === null
+	) {
+		return { ok: false, errors };
+	}
 
 	return {
 		ok: true,
@@ -75,10 +85,10 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 			name,
 			url,
 			method,
-			expectedStatus: expectedStatus!,
-			intervalSeconds: intervalSeconds!,
-			timeoutSeconds: timeoutSeconds!,
-			degradedAfterMs: degradedAfterMs!,
+			expectedStatus,
+			intervalSeconds,
+			timeoutSeconds,
+			degradedAfterMs,
 			// A checkbox: present ("on") when ticked, absent when not. Defaults to public.
 			isPublic: values.is_public === undefined || values.is_public === "on" || values.is_public === "true",
 		},

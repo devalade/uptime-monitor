@@ -66,10 +66,9 @@ export interface DashboardMonitor {
  * Lists all registered monitors.
  */
 export async function listMonitors(db: AppDatabase): Promise<SelectMonitor[]> {
-	const all = await db.findMany(monitors, {
+	return db.findMany(monitors, {
 		orderBy: [["created_at", "desc"]],
 	});
-	return all as SelectMonitor[];
 }
 
 /**
@@ -90,8 +89,7 @@ export async function getDashboardData(db: AppDatabase, timelineLength: number):
  * Gets a single monitor by its primary key.
  */
 export async function getMonitorById(db: AppDatabase, id: string): Promise<SelectMonitor | null> {
-	const row = await db.find(monitors, id);
-	return (row as SelectMonitor | null) ?? null;
+	return db.find(monitors, id);
 }
 
 /**
@@ -101,17 +99,17 @@ export async function getMonitorWithHistory(db: AppDatabase, id: string): Promis
 	const monitor = await getMonitorById(db, id);
 	if (!monitor) return null;
 
-	const results = (await db.findMany(monitorResults, {
+	const results = await db.findMany(monitorResults, {
 		where: eq(monitorResults.monitor_id, id),
 		orderBy: [["created_at", "desc"]],
 		limit: 50,
-	})) as SelectMonitorResult[];
+	});
 
-	const monitorIncidents = (await db.findMany(incidents, {
+	const monitorIncidents = await db.findMany(incidents, {
 		where: eq(incidents.monitor_id, id),
 		orderBy: [["created_at", "desc"]],
 		limit: 20,
-	})) as SelectIncident[];
+	});
 
 	const validLatencies = results
 		.map((r) => r.response_time_ms)
@@ -138,7 +136,7 @@ export async function createMonitor(db: AppDatabase, input: CreateMonitorInput):
 	const now = Date.now();
 	const id = crypto.randomUUID();
 
-	const newMonitor = (await db.create(
+	const newMonitor = await db.create(
 		monitors,
 		{
 			id,
@@ -159,7 +157,7 @@ export async function createMonitor(db: AppDatabase, input: CreateMonitorInput):
 			updated_at: now,
 		},
 		{ returnRow: true },
-	)) as SelectMonitor;
+	);
 
 	return newMonitor;
 }
@@ -181,7 +179,7 @@ export async function toggleMonitor(db: AppDatabase, id: string): Promise<Select
 	const isEnabled = !monitor.is_enabled;
 	const now = Date.now();
 
-	const updated = (await db.update(
+	const updated = await db.update(
 		monitors,
 		id,
 		{
@@ -189,7 +187,7 @@ export async function toggleMonitor(db: AppDatabase, id: string): Promise<Select
 			next_due_at: isEnabled ? now : null,
 			updated_at: now,
 		},
-	)) as SelectMonitor;
+	);
 
 	return updated;
 }
@@ -201,17 +199,17 @@ export async function toggleMonitorVisibility(db: AppDatabase, id: string): Prom
 	const monitor = await getMonitorById(db, id);
 	if (!monitor) return null;
 
-	return (await db.update(monitors, id, {
+	return await db.update(monitors, id, {
 		is_public: !monitor.is_public,
 		updated_at: Date.now(),
-	})) as SelectMonitor;
+	});
 }
 
 /**
  * Finds all active monitors that are due for a health check.
  */
 export async function findDueMonitors(db: AppDatabase, now: number = Date.now()): Promise<SelectMonitor[]> {
-	const due = (await db.findMany(monitors, {
+	const due = await db.findMany(monitors, {
 		where: and(
 			eq(monitors.is_enabled, true),
 			or(
@@ -221,7 +219,7 @@ export async function findDueMonitors(db: AppDatabase, now: number = Date.now())
 		),
 		orderBy: [["next_due_at", "asc"]],
 		limit: 100,
-	})) as SelectMonitor[];
+	});
 
 	return due;
 }
@@ -324,7 +322,7 @@ export async function recordCheckOutcome(
 
 	// Transition: UP/DEGRADED/NULL -> DOWN (Incident starts)
 	if (previousStatus !== "down" && currentStatus === "down") {
-		createdIncident = (await db.create(
+		createdIncident = await db.create(
 			incidents,
 			{
 				id: crypto.randomUUID(),
@@ -336,7 +334,7 @@ export async function recordCheckOutcome(
 				created_at: now,
 			},
 			{ returnRow: true },
-		)) as SelectIncident;
+		);
 
 		if (alerts) {
 			await sendIncidentAlert(alerts, {
@@ -371,7 +369,7 @@ export async function recordCheckOutcome(
 
 	// 3. Advance next_due_at and update cached monitor state
 	const nextDueAt = now + monitor.interval_seconds * 1000;
-	const updatedMonitor = (await db.update(
+	const updatedMonitor = await db.update(
 		monitors,
 		monitor.id,
 		{
@@ -381,7 +379,7 @@ export async function recordCheckOutcome(
 			next_due_at: nextDueAt,
 			updated_at: now,
 		},
-	)) as SelectMonitor;
+	);
 
 	const log = logger.open("job", {
 		monitorId: monitor.id,
@@ -443,11 +441,11 @@ export async function calculate24hUptime(db: AppDatabase, monitorId: string): Pr
  * Latest checks for a monitor, oldest first, for timeline bars.
  */
 export async function listRecentChecks(db: AppDatabase, monitorId: string, limit: number): Promise<CheckSegment[]> {
-	const rows = (await db.findMany(monitorResults, {
+	const rows = await db.findMany(monitorResults, {
 		where: eq(monitorResults.monitor_id, monitorId),
 		orderBy: [["created_at", "desc"]],
 		limit,
-	})) as SelectMonitorResult[];
+	});
 
 	return rows.reverse().map((r) => ({
 		// Slow checks are stored as up with an explanatory message.
@@ -462,10 +460,10 @@ export async function listRecentChecks(db: AppDatabase, monitorId: string, limit
  * Compiles aggregated public status page data including service health, uptime bars, and incidents.
  */
 export async function getPublicStatusPageData(db: AppDatabase, timelineLength: number): Promise<PublicStatusData> {
-	const activeMonitors = (await db.findMany(monitors, {
+	const activeMonitors = await db.findMany(monitors, {
 		where: and(eq(monitors.is_enabled, true), eq(monitors.is_public, true)),
 		orderBy: [["name", "asc"]],
-	})) as SelectMonitor[];
+	});
 
 	const services: PublicServiceStatus[] = await Promise.all(
 		activeMonitors.map(async (mon) => ({
@@ -480,29 +478,28 @@ export async function getPublicStatusPageData(db: AppDatabase, timelineLength: n
 
 	const monitorNames = new Map(activeMonitors.map((m) => [m.id, m.name]));
 	const withMonitorName = (rows: SelectIncident[]): PublicIncident[] =>
-		rows
-			.filter((inc) => monitorNames.has(inc.monitor_id))
-			.map((inc) => ({
-				id: inc.id,
-				monitorName: monitorNames.get(inc.monitor_id)!,
-				startedAt: inc.started_at,
-				resolvedAt: inc.resolved_at,
-			}));
+		rows.flatMap((inc) => {
+			const monitorName = monitorNames.get(inc.monitor_id);
+			// Incidents of private or paused monitors stay off the public page.
+			return monitorName === undefined
+				? []
+				: [{ id: inc.id, monitorName, startedAt: inc.started_at, resolvedAt: inc.resolved_at }];
+		});
 
 	const activeIncidents = withMonitorName(
-		(await db.findMany(incidents, {
+		await db.findMany(incidents, {
 			where: isNull(incidents.resolved_at),
 			orderBy: [["started_at", "desc"]],
 			limit: 10,
-		})) as SelectIncident[],
+		}),
 	);
 
 	const pastIncidents = withMonitorName(
-		(await db.findMany(incidents, {
+		await db.findMany(incidents, {
 			where: and(notNull(incidents.resolved_at), gte(incidents.started_at, Date.now() - 7 * DAY_MS)),
 			orderBy: [["started_at", "desc"]],
 			limit: 10,
-		})) as SelectIncident[],
+		}),
 	);
 
 	const downCount = services.filter((s) => s.status === "down").length;

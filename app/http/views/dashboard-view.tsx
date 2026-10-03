@@ -15,7 +15,7 @@ const dashboardFilters = ["all", "up", "down", "paused"] as const;
 export type DashboardFilter = (typeof dashboardFilters)[number];
 
 export function parseDashboardFilter(raw: string | null): DashboardFilter {
-	return dashboardFilters.includes(raw as DashboardFilter) ? (raw as DashboardFilter) : "all";
+	return dashboardFilters.find((filter) => filter === raw) ?? "all";
 }
 
 export type DashboardNotice =

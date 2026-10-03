@@ -8,6 +8,7 @@
  */
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import type { Middleware } from "remix/router";
 import webRoutes from "~/routes/web";
 import apiRoutes from "~/routes/api";
 
@@ -30,8 +31,8 @@ export interface AdminAuthOptions {
 /** One key set per team, cached across requests in this isolate. */
 const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
-export function adminAuth(options: AdminAuthOptions) {
-	return async (ctx: { request: Request }, next: () => Promise<Response>) => {
+export function adminAuth(options: AdminAuthOptions): Middleware {
+	return async (ctx, next) => {
 		const url = new URL(ctx.request.url);
 		if (publicPaths.has(url.pathname)) {
 			return next();

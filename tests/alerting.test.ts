@@ -32,7 +32,9 @@ describe("webhook formats", () => {
 		assert.match(String(init.body), /^URL: https:\/\/api\.test\/health/);
 		assert.equal(headers.get("Priority"), "high");
 		assert.equal(headers.get("Tags"), "rotating_light");
-		assert.match(headers.get("Title")!, /^=\?UTF-8\?B\?/, "emoji title is header-safe");
+		const title = headers.get("Title");
+		assert.ok(title);
+		assert.match(title, /^=\?UTF-8\?B\?/, "emoji title is header-safe");
 	});
 
 	test("any other URL gets structured JSON", () => {

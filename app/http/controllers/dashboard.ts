@@ -4,7 +4,6 @@
  */
 
 import { createAction } from "remix/router";
-import { AlertsKey, requireDatabase } from "~/app/http/context";
 import { getDashboardData } from "~/app/services/monitor-service";
 import {
 	parseDashboardFilter,
@@ -15,15 +14,15 @@ import {
 import routes from "~/routes/web";
 
 export default createAction(routes.home, async (ctx) => {
-	const db = requireDatabase(ctx);
+	const db = ctx.db;
 	const params = new URL(ctx.request.url).searchParams;
 
 	const html = renderDashboardView({
 		monitors: await getDashboardData(db, TIMELINE_LENGTH),
 		filter: parseDashboardFilter(params.get("filter")),
-		alertsEnabled: Boolean(ctx.get(AlertsKey)),
+		alertsEnabled: Boolean(ctx.alerts),
 		notice: parseDashboardNotice(params),
 	});
 
-	return (ctx as any).render(html);
+	return ctx.render(html);
 });

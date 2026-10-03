@@ -4,13 +4,12 @@
  */
 
 import { createAction } from "remix/router";
-import { AlertsKey, requireDatabase } from "~/app/http/context";
 import { createUptimeMcpHandler } from "~/app/mcp/server";
 import apiRoutes from "~/routes/api";
 
 export default createAction(apiRoutes.mcp, async (ctx) => {
-	const db = requireDatabase(ctx);
+	const db = ctx.db;
 
-	const mcp = createUptimeMcpHandler(db, ctx.get(AlertsKey));
+	const mcp = createUptimeMcpHandler(db, ctx.alerts);
 	return mcp.fetch(ctx.request);
 });

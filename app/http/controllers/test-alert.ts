@@ -4,12 +4,11 @@
  */
 
 import { createAction } from "remix/router";
-import { AlertsKey } from "~/app/http/context";
 import { sendIncidentAlert } from "~/app/services/alerting";
 import routes from "~/routes/web";
 
 export default createAction(routes.testAlert, async (ctx) => {
-	const alerts = ctx.get(AlertsKey);
+	const alerts = ctx.alerts;
 	const origin = new URL(ctx.request.url).origin;
 
 	if (!alerts) {

@@ -93,7 +93,8 @@ describe("incident lifecycle", () => {
 	test("a slow but reachable response also ends the outage", async () => {
 		const db = await createTestDatabase();
 		const down = await getMonitorById(db, (await downMonitor(db)).id);
-		const slow = { ...down!, degraded_after_ms: 0 };
+		assert.ok(down);
+		const slow = { ...down, degraded_after_ms: 0 };
 		stubFetch({ site: [ok] });
 
 		const { monitor: updated } = await checkMonitor(db, slow, undefined, noDelay);
@@ -123,7 +124,9 @@ describe("incident lifecycle", () => {
 		const { webhooks } = stubFetch({ site: [ok], webhookUrl: WEBHOOK });
 
 		await checkMonitor(db, monitor, alerts, noDelay);
-		await checkMonitor(db, (await getMonitorById(db, monitor.id))!, alerts, noDelay);
+		const checked = await getMonitorById(db, monitor.id);
+		assert.ok(checked);
+		await checkMonitor(db, checked, alerts, noDelay);
 
 		assert.equal(webhooks.length, 0);
 	});
