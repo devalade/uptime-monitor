@@ -3,8 +3,31 @@
  * Environment channels (ALERT_EMAIL, ALERT_WEBHOOK_URL) are listed read-only.
  */
 
-import type { Handle, RemixNode } from "remix/component";
+import { css, type Handle, type RemixNode } from "remix/component";
 import { Layout } from "~/app/http/views/layout";
+import {
+	alert,
+	badge,
+	button,
+	card,
+	cardGrid,
+	cardTitle,
+	dim,
+	formActions,
+	formControl,
+	formError,
+	formGroup,
+	formHelp,
+	formLabel,
+	grow,
+	listRow,
+	listRowDisabled,
+	pageHeader,
+	pageSubtitle,
+	pageTitle,
+	rowActions,
+	strong,
+} from "~/app/http/views/styles";
 import { FieldError, FormErrorSummary, invalidProps, SuccessNotice } from "~/app/http/views/ui";
 import {
 	alertChannelTypeLabels,
@@ -35,6 +58,8 @@ export function parseAlertsNotice(params: URLSearchParams): AlertsNotice | undef
 	return undefined;
 }
 
+const targetLine = css({ color: "var(--text-dim)", fontSize: "0.75rem", fontFamily: "var(--font-mono)", marginTop: "0.25rem" });
+
 type FieldAttributes = ({ type: "text" } | { type: "url" } | { type: "email" } | { type: "password" }) & {
 	placeholder?: string;
 	maxlength?: number;
@@ -50,18 +75,20 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 		const total = props.envChannels.length + props.rows.length;
 
 		const field = (name: keyof AlertChannelFormValues, labelText: string, attributes: FieldAttributes, help?: string) => (
-			<div class="form-group">
-				<label for={`ch-${name}`}>{labelText}</label>
+			<div mix={formGroup}>
+				<label for={`ch-${name}`} mix={formLabel}>
+					{labelText}
+				</label>
 				<input
 					id={`ch-${name}`}
 					name={name}
-					class="form-control"
+					mix={formControl}
 					value={values[name] ?? ""}
 					{...attributes}
 					{...invalidProps(`ch-${name}-error`, errors[name])}
 				/>
 				<FieldError id={`ch-${name}-error`} message={errors[name]} />
-				{help ? <p class="form-help">{help}</p> : null}
+				{help ? <p mix={formHelp}>{help}</p> : null}
 			</div>
 		);
 		/** Fields for one channel type; the client script shows the chosen type's section. */
@@ -73,17 +100,17 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 
 		return (
 			<Layout title="Alerts" currentPath={routes.alertChannels.href()}>
-				<div class="page-header">
+				<div mix={pageHeader}>
 					<div>
-						<h1 class="page-title">Alerts</h1>
-						<p class="page-subtitle">
+						<h1 mix={pageTitle}>Alerts</h1>
+						<p mix={pageSubtitle}>
 							Every channel gets DOWN, STILL DOWN reminders and RECOVERED alerts, unless a monitor is set to use only some of them (edit the
 							monitor, then Alerting).
 						</p>
 					</div>
 					{total > 0 ? (
 						<form method="POST" action={routes.testAlert.href()}>
-							<button type="submit" class="btn btn-secondary btn-sm" data-busy="Sending…">
+							<button type="submit" mix={button.secondarySmall} data-busy="Sending…">
 								Test every channel
 							</button>
 						</form>
@@ -92,15 +119,15 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 
 				<Notice notice={props.notice} />
 
-				<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; align-items: start;">
-					<section class="card">
-						<h2>Channels</h2>
-						{total === 0 ? <p class="dim">No channels yet. Checks still run, but nobody is told when something goes down.</p> : null}
+				<div mix={cardGrid}>
+					<section mix={card}>
+						<h2 mix={cardTitle}>Channels</h2>
+						{total === 0 ? <p mix={dim}>No channels yet. Checks still run, but nobody is told when something goes down.</p> : null}
 						{props.envChannels.map((channel) => (
-							<div class="list-row">
+							<div mix={listRow}>
 								<div>
-									<b style="color: var(--text-primary);">{channel.name}</b> <span class="badge badge-pending">environment</span>
-									<div class="dim mono" style="margin-top: 0.25rem;">
+									<b mix={strong}>{channel.name}</b> <span mix={badge.pending}>environment</span>
+									<div mix={targetLine}>
 										{describeChannelTarget(channel)}
 									</div>
 								</div>
@@ -111,13 +138,15 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 						))}
 					</section>
 
-					<section class="card">
-						<h2>Add a channel</h2>
+					<section mix={card}>
+						<h2 mix={cardTitle}>Add a channel</h2>
 						{props.form ? <FormErrorSummary /> : null}
 						<form method="POST" action={routes.createAlertChannel.href()} novalidate data-channel-form>
-							<div class="form-group">
-								<label for="ch-type">Type</label>
-								<select id="ch-type" name="type" class="form-control">
+							<div mix={formGroup}>
+								<label for="ch-type" mix={formLabel}>
+									Type
+								</label>
+								<select id="ch-type" name="type">
 									{alertChannelTypes.map((t) => {
 										const unavailable = t === "email" && !props.canEmail;
 										return (
@@ -128,7 +157,7 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 										);
 									})}
 								</select>
-								{errors.type ? <p class="form-error">{errors.type}</p> : null}
+								{errors.type ? <p mix={formError}>{errors.type}</p> : null}
 							</div>
 							{field("name", "Name", { type: "text", placeholder: "Team Discord", maxlength: 60 })}
 							{section(
@@ -174,9 +203,11 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 									{ type: "text", autocomplete: "off", placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
 									"From an API integration in Opsgenie. Outages open an alert and recoveries close it.",
 								),
-								<div class="form-group">
-									<label for="ch-opsgenie_region">Region</label>
-									<select id="ch-opsgenie_region" name="opsgenie_region" class="form-control">
+								<div mix={formGroup}>
+									<label for="ch-opsgenie_region" mix={formLabel}>
+										Region
+									</label>
+									<select id="ch-opsgenie_region" name="opsgenie_region">
 										<option value="us" selected={values.opsgenie_region !== "eu"}>
 											US (api.opsgenie.com)
 										</option>
@@ -198,8 +229,8 @@ export function AlertChannelsPage(handle: Handle<AlertChannelsPageProps>) {
 								),
 							])}
 							{section("email", field("email_to", "Send to", { type: "email", placeholder: "oncall@example.com" }))}
-							<div style="display: flex; justify-content: flex-end;">
-								<button type="submit" class="btn btn-primary">
+							<div mix={formActions}>
+								<button type="submit" mix={button.primary}>
 									Add channel
 								</button>
 							</div>
@@ -216,32 +247,32 @@ function ChannelRow(handle: Handle<{ row: SelectAlertChannel }>) {
 		const row = handle.props.row;
 		const channel = toAlertChannel(row);
 		return (
-			<div class="list-row" style={row.is_enabled ? undefined : "opacity: 0.55;"}>
-				<div style="min-width: 0;">
-					<b style="color: var(--text-primary);">{row.name}</b> <span class="badge badge-pending">{row.type}</span>
+			<div mix={row.is_enabled ? listRow : listRowDisabled}>
+				<div mix={grow}>
+					<b mix={strong}>{row.name}</b> <span mix={badge.pending}>{row.type}</span>
 					{row.is_enabled ? null : (
 						<>
 							{" "}
-							<span class="badge badge-pending">off</span>
+							<span mix={badge.pending}>off</span>
 						</>
 					)}
-					<div class="dim mono" style="margin-top: 0.25rem;">
+					<div mix={targetLine}>
 						{channel ? describeChannelTarget(channel) : "Incomplete settings"}
 					</div>
 				</div>
-				<div style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end;">
+				<div mix={rowActions}>
 					<form method="POST" action={routes.testAlertChannel.href({ id: row.id })}>
-						<button type="submit" class="btn btn-secondary btn-sm" data-busy="Sending…" disabled={!row.is_enabled}>
+						<button type="submit" mix={button.secondarySmall} data-busy="Sending…" disabled={!row.is_enabled}>
 							Test
 						</button>
 					</form>
 					<form method="POST" action={routes.toggleAlertChannel.href({ id: row.id })}>
-						<button type="submit" class="btn btn-secondary btn-sm">
+						<button type="submit" mix={button.secondarySmall}>
 							{row.is_enabled ? "Turn off" : "Turn on"}
 						</button>
 					</form>
 					<form method="POST" action={routes.deleteAlertChannel.href({ id: row.id })} data-confirm={`Delete the “${row.name}” channel?`}>
-						<button type="submit" class="btn btn-danger btn-sm" aria-label={`Delete ${row.name}`}>
+						<button type="submit" mix={button.dangerSmall} aria-label={`Delete ${row.name}`}>
 							✕
 						</button>
 					</form>
@@ -258,13 +289,13 @@ function Notice(handle: Handle<{ notice?: AlertsNotice }>) {
 		if (notice.kind === "sent") return <SuccessNotice>Test alert sent to {notice.channel}. Check that it arrived.</SuccessNotice>;
 		if (notice.kind === "failed") {
 			return (
-				<div class="alert alert-error" role="alert">
+				<div mix={alert.error} role="alert">
 					<b>Test alert failed.</b> {notice.detail}
 				</div>
 			);
 		}
 		return (
-			<div class="alert alert-error" role="alert">
+			<div mix={alert.error} role="alert">
 				No alert channel is configured, so there is nothing to test.
 			</div>
 		);

@@ -3,8 +3,33 @@
  * alerting, and see what is running, coming up and past.
  */
 
-import type { Handle } from "remix/component";
+import { css, type Handle } from "remix/component";
 import { Layout } from "~/app/http/views/layout";
+import {
+	pageHeader,
+	pageTitle,
+	pageSubtitle,
+	cardGrid,
+	card,
+	cardTitle,
+	listRow,
+	grow,
+	dim,
+	dimSpaced,
+	strong,
+	button,
+	badge,
+	formActions,
+	formGroup,
+	formRow,
+	formLabel,
+	fieldsetLegend,
+	formControl,
+	formHelpTight,
+	checkboxTight,
+	checkboxTighter,
+	checkboxIndentScroll,
+} from "~/app/http/views/styles";
 import { FieldError, FormErrorSummary, invalidProps, LocalTime } from "~/app/http/views/ui";
 import { parseIdList } from "~/app/services/alerting";
 import type { MaintenanceFormErrors, MaintenanceFormValues } from "~/app/services/maintenance";
@@ -18,6 +43,8 @@ export interface MaintenancePageProps {
 	form?: { values: MaintenanceFormValues; errors: MaintenanceFormErrors };
 	now?: number;
 }
+
+const titleRow = css({ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" });
 
 type WindowKind = "active" | "upcoming" | "past";
 
@@ -38,29 +65,29 @@ export function MaintenancePage(handle: Handle<MaintenancePageProps>) {
 
 		return (
 			<Layout title="Maintenance" currentPath={routes.maintenance.href()}>
-				<div class="page-header">
+				<div mix={pageHeader}>
 					<div>
-						<h1 class="page-title">Maintenance</h1>
-						<p class="page-subtitle">
+						<h1 mix={pageTitle}>Maintenance</h1>
+						<p mix={pageSubtitle}>
 							During a window, checks keep running but no incident is opened, nobody is alerted and the checks do not count against uptime.
 							Windows show on the public status page.
 						</p>
 					</div>
 				</div>
 
-				<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; align-items: start;">
-					<section class="card">
-						<h2>Schedule a window</h2>
+				<div mix={cardGrid}>
+					<section mix={card}>
+						<h2 mix={cardTitle}>Schedule a window</h2>
 						{props.form ? <FormErrorSummary /> : null}
 						<form method="POST" action={routes.createMaintenance.href()} novalidate>
 							{/* datetime-local carries no time zone; the client script fills in the browser's offset. */}
 							<input type="hidden" name="tz_offset" value={values.tz_offset ?? "0"} />
-							<div class="form-group">
-								<label for="mw-title">Title</label>
+							<div mix={formGroup}>
+								<label for="mw-title" mix={formLabel}>Title</label>
 								<input
 									id="mw-title"
 									name="title"
-									class="form-control"
+									mix={formControl}
 									placeholder="Database upgrade"
 									value={values.title ?? ""}
 									maxlength={120}
@@ -68,50 +95,50 @@ export function MaintenancePage(handle: Handle<MaintenancePageProps>) {
 								/>
 								<FieldError id={errorId("title")} message={errors.title} />
 							</div>
-							<div class="form-row">
-								<div class="form-group">
-									<label for="mw-starts">Starts</label>
+							<div mix={formRow}>
+								<div mix={formGroup}>
+									<label for="mw-starts" mix={formLabel}>Starts</label>
 									<input
 										id="mw-starts"
 										name="starts_at"
 										type="datetime-local"
-										class="form-control"
+										mix={formControl}
 										value={values.starts_at ?? ""}
 										{...invalidProps(errorId("starts_at"), errors.starts_at)}
 									/>
 									<FieldError id={errorId("starts_at")} message={errors.starts_at} />
 								</div>
-								<div class="form-group">
-									<label for="mw-ends">Ends</label>
+								<div mix={formGroup}>
+									<label for="mw-ends" mix={formLabel}>Ends</label>
 									<input
 										id="mw-ends"
 										name="ends_at"
 										type="datetime-local"
-										class="form-control"
+										mix={formControl}
 										value={values.ends_at ?? ""}
 										{...invalidProps(errorId("ends_at"), errors.ends_at)}
 									/>
 									<FieldError id={errorId("ends_at")} message={errors.ends_at} />
 								</div>
 							</div>
-							<p class="form-help" style="margin-top: -0.5rem; margin-bottom: 1rem;">
+							<p mix={formHelpTight}>
 								Times are in your browser's time zone.
 							</p>
 
-							<fieldset class="form-group" style="border: none;">
-								<legend class="fieldset-legend">Covers</legend>
-								<label class="checkbox" style="margin-bottom: 0.375rem;">
+							<fieldset mix={formGroup}>
+								<legend mix={fieldsetLegend}>Covers</legend>
+								<label mix={checkboxTight}>
 									<input type="radio" name="scope" value="all" checked={!scoped} /> Every monitor
 								</label>
-								<label class="checkbox" style="margin-bottom: 0.375rem;">
+								<label mix={checkboxTight}>
 									<input type="radio" name="scope" value="selected" checked={scoped} /> Only these monitors:
 								</label>
-								<div style="padding-left: 1.5rem; max-height: 180px; overflow-y: auto;">
+								<div mix={checkboxIndentScroll}>
 									{props.monitors.length === 0 ? (
-										<p class="dim">No monitors yet.</p>
+										<p mix={dim}>No monitors yet.</p>
 									) : (
 										props.monitors.map((m) => (
-											<label key={m.id} class="checkbox" style="margin-bottom: 0.25rem;">
+											<label key={m.id} mix={checkboxTighter}>
 												<input type="checkbox" name="monitor_ids" value={m.id} checked={selected.has(m.id)} /> {m.name}
 											</label>
 										))
@@ -120,8 +147,8 @@ export function MaintenancePage(handle: Handle<MaintenancePageProps>) {
 								<FieldError id={errorId("monitor_ids")} message={errors.monitor_ids} />
 							</fieldset>
 
-							<div style="display: flex; justify-content: flex-end;">
-								<button type="submit" class="btn btn-primary">
+							<div mix={formActions}>
+								<button type="submit" mix={button.primary}>
 									Schedule
 								</button>
 							</div>
@@ -129,17 +156,17 @@ export function MaintenancePage(handle: Handle<MaintenancePageProps>) {
 					</section>
 
 					<div>
-						<section class="card">
-							<h2>Current and upcoming</h2>
+						<section mix={card}>
+							<h2 mix={cardTitle}>Current and upcoming</h2>
 							{active.length + upcoming.length === 0 ? (
-								<p class="dim">Nothing scheduled.</p>
+								<p mix={dim}>Nothing scheduled.</p>
 							) : (
 								[...active.map((w) => row(w, "active")), ...upcoming.map((w) => row(w, "upcoming"))]
 							)}
 						</section>
-						<section class="card">
-							<h2>Past</h2>
-							{props.past.length === 0 ? <p class="dim">No past windows.</p> : props.past.map((w) => row(w, "past"))}
+						<section mix={card}>
+							<h2 mix={cardTitle}>Past</h2>
+							{props.past.length === 0 ? <p mix={dim}>No past windows.</p> : props.past.map((w) => row(w, "past"))}
 						</section>
 					</div>
 				</div>
@@ -154,14 +181,14 @@ function WindowRow(handle: Handle<{ window: SelectMaintenanceWindow; kind: Windo
 		const ids = parseIdList(window.monitor_ids);
 		const scope = ids === null ? "All monitors" : ids.map((id) => names.get(id) ?? "Deleted monitor").join(", ");
 		return (
-			<div class="list-row">
-				<div style="min-width: 0;">
-					<div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-						<b style="color: var(--text-primary);">{window.title}</b>
-						{kind === "active" ? <span class="badge badge-maintenance">In progress</span> : null}
-						{kind === "upcoming" ? <span class="badge badge-pending">Scheduled</span> : null}
+			<div mix={listRow}>
+				<div mix={grow}>
+					<div mix={titleRow}>
+						<b mix={strong}>{window.title}</b>
+						{kind === "active" ? <span mix={badge.maintenance}>In progress</span> : null}
+						{kind === "upcoming" ? <span mix={badge.pending}>Scheduled</span> : null}
 					</div>
-					<div class="dim" style="margin-top: 0.25rem;">
+					<div mix={dimSpaced}>
 						<LocalTime at={window.starts_at} /> → <LocalTime at={window.ends_at} /> · {scope}
 					</div>
 				</div>
@@ -171,7 +198,7 @@ function WindowRow(handle: Handle<{ window: SelectMaintenanceWindow; kind: Windo
 						action={routes.endMaintenance.href({ id: window.id })}
 						data-confirm={kind === "active" ? "End this maintenance window now?" : "Cancel this maintenance window?"}
 					>
-						<button type="submit" class="btn btn-secondary btn-sm">
+						<button type="submit" mix={button.secondarySmall}>
 							{kind === "active" ? "End now" : "Cancel"}
 						</button>
 					</form>

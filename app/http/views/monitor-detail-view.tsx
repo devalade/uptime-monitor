@@ -3,11 +3,45 @@
  * Displays real-time status, latency metrics, recent check history, and incidents log.
  */
 
-import type { Handle } from "remix/component";
+import { css, type CSSMixinDescriptor, type Handle } from "remix/component";
 import { formatSeconds, parseRegionSnapshot, type MonitorDetailData } from "~/app/services/monitor-service";
 import { daysLeft, httpsTarget } from "~/app/services/expiry";
 import type { UptimePeriod } from "~/app/services/uptime-stats";
 import { Layout } from "~/app/http/views/layout";
+import {
+	card,
+	cardSplit,
+	cardTitle,
+	cardTitleFlush,
+	cardHeaderRow,
+	sectionTitle,
+	sectionHeader,
+	dim,
+	dimSpaced,
+	mono,
+	button,
+	badge,
+	alert,
+	statsGrid,
+	statCard,
+	statCardEmpty,
+	statLabel,
+	statValue,
+	statValueMono,
+	statUnit,
+	statCaption,
+	statLine,
+	dataTable,
+	tableRow,
+	tableHead,
+	tableCell,
+	tableCellPlainMono,
+	tableCellMono,
+	tableCellMonoBold,
+	tableCellMuted,
+	settingsList,
+	copyFieldSpaced,
+} from "~/app/http/views/styles";
 import { formatDuration, formatPercentage, LocalTime, ResponseChart, TypeChip } from "~/app/http/views/ui";
 import { EDIT_DIALOG_ID, MonitorDialog, type ChannelOption, type MonitorFormState } from "~/app/http/views/monitor-form-dialog";
 import { settingsToFormValues } from "~/app/services/monitor-input";
@@ -26,7 +60,96 @@ export interface MonitorDetailPageProps {
 	editForm?: MonitorFormState;
 }
 
-const statusBadgeClasses: Record<string, string> = { up: "badge-up", down: "badge-down", degraded: "badge-degraded" };
+const statusBadges: Record<string, CSSMixinDescriptor> = { up: badge.up, down: badge.down, degraded: badge.degraded };
+
+const backLinkRow = css({ marginBottom: "1.5rem" });
+const backLink = css({
+	fontSize: "0.8125rem",
+	fontWeight: "500",
+	color: "var(--text-muted)",
+	display: "inline-flex",
+	alignItems: "center",
+	gap: "0.5rem",
+	transition: "color 150ms ease",
+});
+const hero = css({
+	background: "var(--bg-surface)",
+	border: "1px solid var(--border-subtle)",
+	borderRadius: "1rem",
+	padding: "2rem",
+	marginBottom: "2rem",
+	boxShadow: "0 10px 30px -10px rgba(0, 0, 0, 0.5)",
+});
+const heroLayout = css({ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "1.5rem" });
+const heroBadges = css({ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.5rem" });
+const heroTitle = css({ fontSize: "1.75rem", fontWeight: "700", letterSpacing: "-0.02em", color: "#fff", marginBottom: "0.375rem" });
+const heroTarget = css({
+	fontFamily: "var(--font-mono)",
+	fontSize: "0.875rem",
+	color: "var(--text-muted)",
+	display: "flex",
+	alignItems: "center",
+	gap: "0.5rem",
+});
+const heroActions = css({ display: "flex", gap: "0.625rem", flexWrap: "wrap" });
+
+const emptyIcon = css({
+	width: "42px",
+	height: "42px",
+	borderRadius: "50%",
+	background: "var(--up-bg)",
+	display: "flex",
+	alignItems: "center",
+	justifyContent: "center",
+	margin: "0 auto 0.75rem",
+});
+const emptyTitle = css({ fontSize: "1rem", fontWeight: "600", color: "#fff", marginBottom: "0.25rem" });
+const emptyText = css({ color: "var(--text-muted)", fontSize: "0.8125rem" });
+const historySection = css({ marginBottom: "3rem" });
+const incidentPanel = css({
+	background: "var(--bg-surface)",
+	border: "1px solid var(--border-subtle)",
+	borderRadius: "0.75rem",
+	overflow: "hidden",
+});
+const telemetryPanel = css({
+	background: "var(--bg-surface)",
+	border: "1px solid var(--border-subtle)",
+	borderRadius: "0.75rem",
+	overflow: "hidden",
+	boxShadow: "0 4px 16px -2px rgba(0, 0, 0, 0.3)",
+});
+const noProbes = css({ textAlign: "center", color: "var(--text-muted)", padding: "3rem" });
+
+const latencyBase = { fontFamily: "var(--font-mono)", fontWeight: "600" };
+const latencyCell = {
+	fast: css({ ...latencyBase, padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", color: "var(--up)" }),
+	medium: css({ ...latencyBase, padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", color: "var(--degraded)" }),
+	slow: css({ ...latencyBase, padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", color: "var(--down)" }),
+};
+const detailsBase = { padding: "10px 16px", borderBottom: "1px solid var(--border-subtle)", fontSize: "0.8125rem" };
+const detailsCell = {
+	ok: css({ ...detailsBase, color: "var(--text-muted)" }),
+	failed: css({ ...detailsBase, color: "var(--down)" }),
+};
+const targetLink = css({ color: "var(--text-secondary)", textDecoration: "underline", textUnderlineOffset: "3px" });
+const targetText = css({ color: "var(--text-secondary)" });
+const targetIcon = css({ color: "var(--text-dim)" });
+
+const expiryGrid = css({
+	display: "grid",
+	gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+	gap: "1.25rem",
+	fontSize: "0.8125rem",
+});
+const expiryWarn = css({ color: "var(--degraded)", marginTop: "0.25rem" });
+const expiryColor = {
+	up: css({ fontSize: "1.125rem", fontWeight: "700", marginTop: "0.375rem", color: "var(--up)" }),
+	degraded: css({ fontSize: "1.125rem", fontWeight: "700", marginTop: "0.375rem", color: "var(--degraded)" }),
+	down: css({ fontSize: "1.125rem", fontWeight: "700", marginTop: "0.375rem", color: "var(--down)" }),
+	unknown: css({ fontSize: "1.125rem", fontWeight: "700", marginTop: "0.375rem", color: "var(--text-muted)" }),
+};
+const copyLead = css({ color: "var(--text-muted)", fontSize: "0.8125rem", marginBottom: "0.75rem" });
 
 export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 	return () => {
@@ -38,11 +161,8 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 
 		return (
 			<Layout title={m.name} channels={props.channels}>
-				<div style="margin-bottom: 1.5rem;">
-					<a
-						href={routes.home.href()}
-						style="font-size: 0.8125rem; font-weight: 500; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.5rem; transition: color 150ms ease;"
-					>
+				<div mix={backLinkRow}>
+					<a href={routes.home.href()} mix={backLink}>
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<line x1="19" y1="12" x2="5" y2="12"></line>
 							<polyline points="12 19 5 12 12 5"></polyline>
@@ -51,29 +171,28 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 					</a>
 				</div>
 
-				<div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 1rem; padding: 2rem; margin-bottom: 2rem; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);">
-					<div style="display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1.5rem;">
+				<div mix={hero}>
+					<div mix={heroLayout}>
 						<div>
-							<div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-								<span class={`badge ${statusBadgeClasses[status] ?? "badge-pending"}`}>
-									{status !== "pending" && !isPaused ? <span class="dot-pulse"></span> : null}
+							<div mix={heroBadges}>
+								<span mix={statusBadges[status] ?? badge.pending}>
 									{isPaused ? "PAUSED" : status.toUpperCase()}
 								</span>
 								<TypeChip monitor={m} />
-								{data.inMaintenance ? <span class="badge badge-maintenance">Maintenance</span> : null}
+								{data.inMaintenance ? <span mix={badge.maintenance}>Maintenance</span> : null}
 							</div>
-							<h1 style="font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; color: #fff; margin-bottom: 0.375rem;">{m.name}</h1>
-							<p style="font-family: var(--font-mono); font-size: 0.875rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
+							<h1 mix={heroTitle}>{m.name}</h1>
+							<p mix={heroTarget}>
 								<MonitorTarget monitor={m} />
 							</p>
 						</div>
 
-						<div style="display: flex; gap: 0.625rem; flex-wrap: wrap;">
-							<button type="button" class="btn btn-secondary btn-sm" data-dialog-open={EDIT_DIALOG_ID}>
+						<div mix={heroActions}>
+							<button type="button" mix={button.secondarySmall} data-dialog-open={EDIT_DIALOG_ID}>
 								Edit
 							</button>
 							<form method="POST" action={routes.checkMonitor.href({ id: m.id })}>
-								<button type="submit" class="btn btn-primary btn-sm" data-busy="Checking…">
+								<button type="submit" mix={button.primarySmall} data-busy="Checking…">
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 										<polyline points="23 4 23 10 17 10"></polyline>
 										<polyline points="1 20 1 14 7 14"></polyline>
@@ -83,7 +202,7 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 								</button>
 							</form>
 							<form method="POST" action={routes.toggleMonitor.href({ id: m.id })}>
-								<button type="submit" class="btn btn-secondary btn-sm">
+								<button type="submit" mix={button.secondarySmall}>
 									{m.is_enabled ? (
 										<>
 											<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -105,7 +224,7 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 							<form method="POST" action={routes.toggleVisibility.href({ id: m.id })}>
 								<button
 									type="submit"
-									class="btn btn-secondary btn-sm"
+									mix={button.secondarySmall}
 									title={m.is_public ? "Currently shown on the public status page" : "Currently hidden from the public status page"}
 								>
 									{m.is_public ? "Hide from status page" : "Show on status page"}
@@ -116,7 +235,7 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 								action={routes.deleteMonitor.href({ id: m.id })}
 								data-confirm={`Delete “${m.name}” and all of its history? This cannot be undone.`}
 							>
-								<button type="submit" class="btn btn-danger btn-sm">
+								<button type="submit" mix={button.dangerSmall}>
 									<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 										<polyline points="3 6 5 6 21 6"></polyline>
 										<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -129,63 +248,63 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 				</div>
 
 				{data.inMaintenance ? (
-					<div class="alert" style="border-color: rgba(56, 139, 253, 0.35); background: var(--brand-bg); color: var(--brand);">
+					<div mix={alert.maintenance}>
 						This monitor is in a maintenance window. Checks still run, but no incident is opened and nobody is alerted.
 					</div>
 				) : null}
 
 				{m.type === "heartbeat" && props.pingUrl ? <HeartbeatSetup monitor={m} pingUrl={props.pingUrl} /> : null}
 
-				<section class="stats-grid">
-					<div class="stat-card">
-						<div class="stat-label">24h Uptime</div>
-						<div class="stat-value" style={`color: ${uptimeColor(data.uptimePercentage24h)};`}>
+				<section mix={statsGrid}>
+					<div mix={statCard}>
+						<div mix={statLabel}>24h Uptime</div>
+						<div mix={statValue} style={{ color: uptimeColor(data.uptimePercentage24h) }}>
 							{formatPercentage(data.uptimePercentage24h)}
 						</div>
-						<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
+						<div mix={statCaption}>
 							{data.uptimePercentage24h === null ? "No checks in the last 24 hours" : "Successful checks, last 24 hours"}
 						</div>
 					</div>
 
-					<div class="stat-card">
-						<div class="stat-label">Uptime 7 / 30 / 90 days</div>
-						<div style="display: flex; gap: 1rem; margin-top: 0.625rem; font-family: var(--font-mono); font-size: 1.0625rem; font-weight: 700;">
+					<div mix={statCard}>
+						<div mix={statLabel}>Uptime 7 / 30 / 90 days</div>
+						<div mix={statLine}>
 							{([7, 30, 90] as const).map((days) => (
-								<span style={`color: ${uptimeColor(props.uptime[days])};`} title={`Last ${days} days`}>
+								<span style={{ color: uptimeColor(props.uptime[days]) }} title={`Last ${days} days`}>
 									{formatPercentage(props.uptime[days])}
 								</span>
 							))}
 						</div>
-						<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">From daily totals, updated hourly</div>
+						<div mix={statCaption}>From daily totals, updated hourly</div>
 					</div>
 
 					{m.type === "heartbeat" ? (
-						<div class="stat-card">
-							<div class="stat-label">Last ping</div>
-							<div class="stat-value" style="font-size: 1.125rem; margin-top: 0.75rem; font-family: var(--font-mono); color: var(--text-secondary);">
+						<div mix={statCard}>
+							<div mix={statLabel}>Last ping</div>
+							<div mix={statValueMono}>
 								{m.last_ping_at ? <LocalTime at={m.last_ping_at} /> : "Never"}
 							</div>
-							<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
+							<div mix={statCaption}>
 								Expected every {formatSeconds(m.interval_seconds)}, {formatSeconds(m.grace_seconds)} grace
 							</div>
 						</div>
 					) : (
-						<div class="stat-card">
-							<div class="stat-label">Average response</div>
-							<div class="stat-value">
+						<div mix={statCard}>
+							<div mix={statLabel}>Average response</div>
+							<div mix={statValue}>
 								{data.averageLatencyMs}
-								<span style="font-size: 1rem; color: var(--text-muted); margin-left: 4px; font-weight: 500;">ms</span>
+								<span mix={statUnit}>ms</span>
 							</div>
-							<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">Over the last {data.results.length} checks</div>
+							<div mix={statCaption}>Over the last {data.results.length} checks</div>
 						</div>
 					)}
 
-					<div class="stat-card">
-						<div class="stat-label">Last Checked</div>
-						<div class="stat-value" style="font-size: 1.125rem; margin-top: 0.75rem; font-family: var(--font-mono); color: var(--text-secondary);">
+					<div mix={statCard}>
+						<div mix={statLabel}>Last Checked</div>
+						<div mix={statValueMono}>
 							{m.last_checked_at ? <LocalTime at={m.last_checked_at} /> : "Never"}
 						</div>
-						<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
+						<div mix={statCaption}>
 							{isPaused ? (
 								"Paused — resume to check again"
 							) : m.next_due_at ? (
@@ -199,10 +318,10 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 					</div>
 				</section>
 
-				<section class="card" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem;">
+				<section mix={cardSplit}>
 					<div>
-						<h2>Settings</h2>
-						<dl class="settings-list">
+						<h2 mix={cardTitle}>Settings</h2>
+						<dl mix={settingsList}>
 							{describeSettings(m).map(([term, detail]) => (
 								<div>
 									<dt>{term}</dt>
@@ -213,7 +332,7 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 					</div>
 					{m.type === "heartbeat" ? null : (
 						<div>
-							<h2>Response time</h2>
+							<h2 mix={cardTitle}>Response time</h2>
 							<ResponseChart
 								checks={[...data.results].reverse().map((r) => ({
 									status: !r.is_up ? "down" : r.error_message ? "degraded" : "up",
@@ -230,45 +349,45 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 
 				{m.type === "heartbeat" ? null : <RegionsCard monitor={m} />}
 
-				<section style="margin-bottom: 3rem;">
-					<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem;">
-						<h2 style="font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em;">Incident History ({data.incidents.length})</h2>
+				<section mix={historySection}>
+					<div mix={sectionHeader}>
+						<h2 mix={sectionTitle}>Incident History ({data.incidents.length})</h2>
 					</div>
 
 					{data.incidents.length === 0 ? (
-						<div class="stat-card" style="padding: 2.5rem; text-align: center;">
-							<div style="width: 42px; height: 42px; border-radius: 50%; background: var(--up-bg); display: flex; align-items: center; justify-content: center; margin: 0 auto 0.75rem;">
+						<div mix={statCardEmpty}>
+							<div mix={emptyIcon}>
 								<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--up)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 									<polyline points="20 6 9 17 4 12"></polyline>
 								</svg>
 							</div>
-							<h3 style="font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.25rem;">No incidents</h3>
-							<p style="color: var(--text-muted); font-size: 0.8125rem;">This monitor has not had an outage yet.</p>
+							<h3 mix={emptyTitle}>No incidents</h3>
+							<p mix={emptyText}>This monitor has not had an outage yet.</p>
 						</div>
 					) : (
-						<div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 0.75rem; overflow: hidden;">
-							<table class="data-table">
+						<div mix={incidentPanel}>
+							<table mix={dataTable}>
 								<thead>
 									<tr>
-										<th>Started At</th>
-										<th>Resolved At</th>
-										<th>Duration</th>
-										<th>Failure Cause</th>
+										<th mix={tableHead}>Started At</th>
+										<th mix={tableHead}>Resolved At</th>
+										<th mix={tableHead}>Duration</th>
+										<th mix={tableHead}>Failure Cause</th>
 									</tr>
 								</thead>
 								<tbody>
 									{data.incidents.map((inc) => (
-										<tr key={inc.id}>
-											<td style="font-family: var(--font-mono); font-size: 0.8125rem;">
+										<tr key={inc.id} mix={tableRow}>
+											<td mix={tableCellMono}>
 												<LocalTime at={inc.started_at} />
 											</td>
-											<td style="font-family: var(--font-mono); font-size: 0.8125rem;">
+											<td mix={tableCellMono}>
 												{inc.resolved_at ? <LocalTime at={inc.resolved_at} /> : "Ongoing"}
 											</td>
-											<td>
-												{inc.resolved_at ? formatDuration(inc.resolved_at - inc.started_at) : <span class="badge badge-down">Active</span>}
+											<td mix={tableCell}>
+												{inc.resolved_at ? formatDuration(inc.resolved_at - inc.started_at) : <span mix={badge.down}>Active</span>}
 											</td>
-											<td style="color: var(--text-secondary);">{inc.cause}</td>
+											<td mix={tableCell}>{inc.cause}</td>
 										</tr>
 									))}
 								</tbody>
@@ -278,63 +397,63 @@ export function MonitorDetailPage(handle: Handle<MonitorDetailPageProps>) {
 				</section>
 
 				<section>
-					<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem;">
-						<h2 style="font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em;">Recent Probe Telemetry ({data.results.length})</h2>
+					<div mix={sectionHeader}>
+						<h2 mix={sectionTitle}>Recent Probe Telemetry ({data.results.length})</h2>
 					</div>
 
-					<div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 0.75rem; overflow: hidden; box-shadow: 0 4px 16px -2px rgba(0,0,0,0.3);">
-						<table class="data-table">
+					<div mix={telemetryPanel}>
+						<table mix={dataTable}>
 							<thead>
 								<tr>
-									<th>Timestamp</th>
-									<th>Status</th>
-									<th>HTTP Code</th>
-									<th>Latency</th>
-									<th>Details</th>
+									<th mix={tableHead}>Timestamp</th>
+									<th mix={tableHead}>Status</th>
+									<th mix={tableHead}>HTTP Code</th>
+									<th mix={tableHead}>Latency</th>
+									<th mix={tableHead}>Details</th>
 								</tr>
 							</thead>
 							<tbody>
 								{data.results.length === 0 ? (
 									<tr>
-										<td colSpan={5} style="text-align: center; color: var(--text-muted); padding: 3rem;">
+										<td colSpan={5} mix={noProbes}>
 											{m.type === "heartbeat" ? "No pings recorded yet." : 'No probes recorded yet. Click "Check Now" above to run an instant health check.'}
 										</td>
 									</tr>
 								) : (
 									data.results.map((r) => {
-										const latencyColor =
+										const latency =
 											r.response_time_ms && r.response_time_ms < 500
-												? "color: var(--up);"
+												? latencyCell.fast
 												: r.response_time_ms && r.response_time_ms < 1500
-													? "color: var(--degraded);"
-													: "color: var(--down);";
+													? latencyCell.medium
+													: latencyCell.slow;
 										return (
-											<tr key={r.id}>
-												<td style="font-family: var(--font-mono); font-size: 0.8125rem; color: var(--text-secondary);">
+											<tr key={r.id} mix={tableRow}>
+												<td mix={tableCellMono}>
 													<LocalTime at={r.created_at} />
 												</td>
-												<td>
+												<td mix={tableCell}>
 													{!r.is_up ? (
-														<span class="badge badge-down">DOWN</span>
+														<span mix={badge.down}>DOWN</span>
 													) : r.error_message ? (
-														<span class="badge badge-degraded">SLOW</span>
+														<span mix={badge.degraded}>SLOW</span>
 													) : (
-														<span class="badge badge-up">UP</span>
+														<span mix={badge.up}>UP</span>
 													)}
 													{r.is_maintenance ? (
 														<>
 															{" "}
-															<span class="badge badge-maintenance" title="During maintenance: not counted in uptime">
+															<span mix={badge.maintenance} title="During maintenance: not counted in uptime">
 																MAINT
 															</span>
 														</>
 													) : null}
 												</td>
-												<td style="font-family: var(--font-mono); font-weight: 600;">{r.response_status ?? "-"}</td>
-												<td style={`font-family: var(--font-mono); font-weight: 600; ${latencyColor}`}>
+												<td mix={tableCellMonoBold}>{r.response_status ?? "-"}</td>
+												<td mix={latency}>
 													{r.response_time_ms !== null ? `${r.response_time_ms}ms` : "-"}
 												</td>
-												<td style={`color: ${r.is_up ? "var(--text-muted)" : "var(--down)"}; font-size: 0.8125rem;`}>{r.error_message ?? "OK"}</td>
+												<td mix={r.is_up ? detailsCell.ok : detailsCell.failed}>{r.error_message ?? "OK"}</td>
 											</tr>
 										);
 									})
@@ -363,12 +482,7 @@ function MonitorTarget(handle: Handle<{ monitor: SelectMonitor }>) {
 		if (m.type === "http") {
 			return (
 				<>
-					<a
-						href={/^https?:\/\//i.test(m.url) ? m.url : "#"}
-						target="_blank"
-						rel="noopener"
-						style="color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px;"
-					>
+					<a href={/^https?:\/\//i.test(m.url) ? m.url : "#"} target="_blank" rel="noopener" mix={targetLink}>
 						{m.url}
 					</a>
 					<svg
@@ -380,7 +494,7 @@ function MonitorTarget(handle: Handle<{ monitor: SelectMonitor }>) {
 						stroke-width="2"
 						stroke-linecap="round"
 						stroke-linejoin="round"
-						style="color: var(--text-dim);"
+						mix={targetIcon}
 					>
 						<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
 						<polyline points="15 3 21 3 21 9"></polyline>
@@ -389,8 +503,8 @@ function MonitorTarget(handle: Handle<{ monitor: SelectMonitor }>) {
 				</>
 			);
 		}
-		if (m.type === "tcp") return <span style="color: var(--text-secondary);">tcp://{m.url}</span>;
-		if (m.type === "dns") return <span style="color: var(--text-secondary);">{`${m.dns_record_type} ${m.url}`}</span>;
+		if (m.type === "tcp") return <span mix={targetText}>tcp://{m.url}</span>;
+		if (m.type === "dns") return <span mix={targetText}>{`${m.dns_record_type} ${m.url}`}</span>;
 		return <span>Heartbeat monitor</span>;
 	};
 }
@@ -400,36 +514,36 @@ function ExpiryCard(handle: Handle<{ monitor: SelectMonitor }>) {
 		const m = handle.props.monitor;
 		const now = Date.now();
 		const describe = (expiresAt: number | null) => {
-			if (expiresAt === null) return { text: "Unknown", color: "var(--text-muted)" };
+			if (expiresAt === null) return { text: "Unknown", mix: expiryColor.unknown };
 			const days = daysLeft(expiresAt, now);
-			const color = days < 0 ? "var(--down)" : m.expiry_warning_days > 0 && days <= m.expiry_warning_days ? "var(--degraded)" : "var(--up)";
-			return { text: days < 0 ? `Expired ${-days} day${days === -1 ? "" : "s"} ago` : `${days} day${days === 1 ? "" : "s"} left`, color };
+			const mix = days < 0 ? expiryColor.down : m.expiry_warning_days > 0 && days <= m.expiry_warning_days ? expiryColor.degraded : expiryColor.up;
+			return { text: days < 0 ? `Expired ${-days} day${days === -1 ? "" : "s"} ago` : `${days} day${days === 1 ? "" : "s"} left`, mix };
 		};
 		const cert = describe(m.cert_expires_at);
 		const domain = describe(m.domain_expires_at);
 
 		return (
-			<section class="card">
-				<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.875rem;">
-					<h2 style="margin: 0;">Certificate and domain</h2>
+			<section mix={card}>
+				<div mix={cardHeaderRow}>
+					<h2 mix={cardTitleFlush}>Certificate and domain</h2>
 					<form method="POST" action={routes.checkExpiry.href({ id: m.id })}>
-						<button type="submit" class="btn btn-secondary btn-sm" data-busy="Checking…">
+						<button type="submit" mix={button.secondarySmall} data-busy="Checking…">
 							Check now
 						</button>
 					</form>
 				</div>
-				<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem; font-size: 0.8125rem;">
+				<div mix={expiryGrid}>
 					<div>
-						<div class="stat-label">TLS certificate</div>
-						<div style={`font-size: 1.125rem; font-weight: 700; color: ${cert.color}; margin-top: 0.375rem;`}>{cert.text}</div>
-						<div class="dim" style="margin-top: 0.25rem;">
+						<div mix={statLabel}>TLS certificate</div>
+						<div mix={cert.mix}>{cert.text}</div>
+						<div mix={dimSpaced}>
 							{m.cert_expires_at ? (
 								<>
 									Expires <LocalTime at={m.cert_expires_at} format="date" />
 									{m.cert_issuer ? ` · issued by ${m.cert_issuer}` : null}
 								</>
 							) : null}
-							{m.cert_error ? <div style="color: var(--degraded); margin-top: 0.25rem;">{m.cert_error}</div> : null}
+							{m.cert_error ? <div mix={expiryWarn}>{m.cert_error}</div> : null}
 							{m.cert_checked_at ? (
 								<div>
 									Checked <LocalTime at={m.cert_checked_at} />
@@ -440,9 +554,9 @@ function ExpiryCard(handle: Handle<{ monitor: SelectMonitor }>) {
 						</div>
 					</div>
 					<div>
-						<div class="stat-label">Domain registration</div>
-						<div style={`font-size: 1.125rem; font-weight: 700; color: ${domain.color}; margin-top: 0.375rem;`}>{domain.text}</div>
-						<div class="dim" style="margin-top: 0.25rem;">
+						<div mix={statLabel}>Domain registration</div>
+						<div mix={domain.mix}>{domain.text}</div>
+						<div mix={dimSpaced}>
 							{m.domain_expires_at ? (
 								<>
 									Expires <LocalTime at={m.domain_expires_at} format="date" />
@@ -465,10 +579,10 @@ function ExpiryCard(handle: Handle<{ monitor: SelectMonitor }>) {
 	};
 }
 
-const regionBadges: Record<string, { css: string; label: string }> = {
-	up: { css: "badge-up", label: "UP" },
-	degraded: { css: "badge-degraded", label: "SLOW" },
-	down: { css: "badge-down", label: "DOWN" },
+const regionBadges: Record<string, { mix: CSSMixinDescriptor; label: string }> = {
+	up: { mix: badge.up, label: "UP" },
+	degraded: { mix: badge.degraded, label: "SLOW" },
+	down: { mix: badge.down, label: "DOWN" },
 };
 
 function RegionsCard(handle: Handle<{ monitor: SelectMonitor }>) {
@@ -477,11 +591,11 @@ function RegionsCard(handle: Handle<{ monitor: SelectMonitor }>) {
 		const snapshot = parseRegionSnapshot(m.region_results);
 
 		return (
-			<section class="card">
-				<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.875rem;">
+			<section mix={card}>
+				<div mix={cardHeaderRow}>
 					<div>
-						<h2 style="margin: 0;">From every region</h2>
-						<p class="dim" style="margin-top: 0.25rem;">
+						<h2 mix={cardTitleFlush}>From every region</h2>
+						<p mix={dimSpaced}>
 							{snapshot ? (
 								<>
 									Checked <LocalTime at={snapshot.checkedAt} />. Also updated whenever a failure is confirmed.
@@ -492,32 +606,32 @@ function RegionsCard(handle: Handle<{ monitor: SelectMonitor }>) {
 						</p>
 					</div>
 					<form method="POST" action={routes.checkRegions.href({ id: m.id })}>
-						<button type="submit" class="btn btn-secondary btn-sm" data-busy="Checking…">
+						<button type="submit" mix={button.secondarySmall} data-busy="Checking…">
 							Check from every region
 						</button>
 					</form>
 				</div>
 				{snapshot ? (
-					<table class="data-table">
+					<table mix={dataTable}>
 						<thead>
 							<tr>
-								<th>Location</th>
-								<th>Status</th>
-								<th>Time</th>
-								<th>Details</th>
+								<th mix={tableHead}>Location</th>
+								<th mix={tableHead}>Status</th>
+								<th mix={tableHead}>Time</th>
+								<th mix={tableHead}>Details</th>
 							</tr>
 						</thead>
 						<tbody>
 							{snapshot.results.map((r) => {
-								const badge = regionBadges[r.status] ?? { css: "badge-pending", label: "ERROR" };
+								const regionBadge = regionBadges[r.status] ?? { mix: badge.pending, label: "ERROR" };
 								return (
-									<tr>
-										<td>{r.label}</td>
-										<td>
-											<span class={`badge ${badge.css}`}>{badge.label}</span>
+									<tr mix={tableRow}>
+										<td mix={tableCell}>{r.label}</td>
+										<td mix={tableCell}>
+											<span mix={regionBadge.mix}>{regionBadge.label}</span>
 										</td>
-										<td class="mono">{r.responseTimeMs !== null ? `${r.responseTimeMs}ms` : "-"}</td>
-										<td class="muted">{r.errorMessage ?? "OK"}</td>
+										<td mix={tableCellPlainMono}>{r.responseTimeMs !== null ? `${r.responseTimeMs}ms` : "-"}</td>
+										<td mix={tableCellMuted}>{r.errorMessage ?? "OK"}</td>
 									</tr>
 								);
 							})}
@@ -541,27 +655,27 @@ function HeartbeatSetup(handle: Handle<{ monitor: SelectMonitor; pingUrl: string
 		const { monitor: m, pingUrl } = handle.props;
 		const curl = `curl -fsS -m 10 --retry 3 ${pingUrl}`;
 		return (
-			<section class="card">
-				<h2>Ping this URL from your job</h2>
-				<p class="muted" style="font-size: 0.8125rem; margin-bottom: 0.75rem;">
+			<section mix={card}>
+				<h2 mix={cardTitle}>Ping this URL from your job</h2>
+				<p mix={copyLead}>
 					Call it each time the job succeeds.{" "}
 					{m.last_ping_at ? null : "The monitor stays pending until the first ping, so nobody is paged before you set it up. "}
 					Keep it secret: anyone with the URL can report in.
 				</p>
-				<div class="copy-field" style="margin-bottom: 0.5rem;">
+				<div mix={copyFieldSpaced}>
 					<code>{pingUrl}</code>
-					<button type="button" class="btn btn-secondary btn-sm" data-copy={pingUrl}>
+					<button type="button" mix={button.secondarySmall} data-copy={pingUrl}>
 						Copy
 					</button>
 				</div>
-				<div class="copy-field" style="margin-bottom: 0.5rem;">
+				<div mix={copyFieldSpaced}>
 					<code>{curl}</code>
-					<button type="button" class="btn btn-secondary btn-sm" data-copy={curl}>
+					<button type="button" mix={button.secondarySmall} data-copy={curl}>
 						Copy
 					</button>
 				</div>
-				<p class="dim">
-					Report a failure straight away with <code class="mono">{`${pingUrl}/fail`}</code>. GET, POST and HEAD all work.
+				<p mix={dim}>
+					Report a failure straight away with <code mix={mono}>{`${pingUrl}/fail`}</code>. GET, POST and HEAD all work.
 				</p>
 			</section>
 		);

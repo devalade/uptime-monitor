@@ -2,10 +2,22 @@
  * Small components shared by the server-rendered pages.
  */
 
-import type { Handle, RemixNode } from "remix/component";
+import { css, type Handle, type RemixNode } from "remix/component";
+import { alert, formError, methodChip, tick, timeline } from "~/app/http/views/styles";
 import type { CheckSegment } from "~/app/services/monitor-service";
 import type { DailyUptime } from "~/app/services/uptime-stats";
 import type { SelectMonitor } from "~/database/schema";
+
+const emptyChart = css({ color: "var(--text-dim)", fontSize: "0.75rem", padding: "1.5rem 0", textAlign: "center" });
+const chartSvg = css({ width: "100%", display: "block" });
+const chartLegend = css({
+	display: "flex",
+	justifyContent: "space-between",
+	fontSize: "10px",
+	color: "var(--text-dim)",
+	fontFamily: "var(--font-mono)",
+	marginTop: "4px",
+});
 
 export function formatPercentage(value: number | null): string {
 	return value === null ? "—" : `${value}%`;
@@ -46,9 +58,9 @@ export function Timeline(handle: Handle<{ checks: CheckSegment[]; length: number
 		const { checks, length, height = 14 } = handle.props;
 		const empty = Math.max(0, length - checks.length);
 		return (
-			<div class="timeline">
+			<div mix={timeline}>
 				{Array.from({ length: empty }, () => (
-					<div class="tick empty" style={`height: ${height}px;`} data-tip="No check recorded"></div>
+					<div mix={tick.empty} style={{ height: `${height}px` }} data-tip="No check recorded"></div>
 				))}
 				{checks.slice(-length).map((check) => {
 					const lines = [
@@ -57,7 +69,7 @@ export function Timeline(handle: Handle<{ checks: CheckSegment[]; length: number
 						check.statusCode !== null ? `HTTP ${check.statusCode}` : "No response",
 						check.responseTimeMs !== null ? `${check.responseTimeMs}ms` : "",
 					].filter(Boolean);
-					return <div class={`tick ${check.status}`} style={`height: ${height}px;`} data-tip={lines.join("\n")}></div>;
+					return <div mix={tick[check.status]} style={{ height: `${height}px` }} data-tip={lines.join("\n")}></div>;
 				})}
 			</div>
 		);
@@ -71,7 +83,7 @@ export function DailyBars(handle: Handle<{ days: DailyUptime[]; height?: number 
 	return () => {
 		const { days, height = 28 } = handle.props;
 		return (
-			<div class="timeline">
+			<div mix={timeline}>
 				{days.map((day) => {
 					const status =
 						day.uptimePercentage === null ? "empty" : day.uptimePercentage >= 99.9 ? "up" : day.uptimePercentage >= 98 ? "degraded" : "down";
@@ -79,11 +91,29 @@ export function DailyBars(handle: Handle<{ days: DailyUptime[]; height?: number 
 						day.uptimePercentage === null
 							? `${day.day}\nNo data`
 							: `${day.day}\n${day.uptimePercentage}% uptime\n${day.totalChecks} checks${day.avgResponseMs !== null ? `, avg ${day.avgResponseMs}ms` : ""}`;
-					return <div key={day.day} class={`tick ${status}`} style={`height: ${height}px;`} data-tip={tip}></div>;
+					return <div key={day.day} mix={tick[status]} style={{ height: `${height}px` }} data-tip={tip}></div>;
 				})}
 			</div>
 		);
 	};
+}
+
+function chipFor(monitor: Pick<SelectMonitor, "type" | "method">) {
+	if (monitor.type !== "http") return methodChip[monitor.type];
+	switch (monitor.method) {
+		case "HEAD":
+			return methodChip.head;
+		case "POST":
+			return methodChip.post;
+		case "PUT":
+			return methodChip.put;
+		case "PATCH":
+			return methodChip.patch;
+		case "DELETE":
+			return methodChip.delete;
+		default:
+			return methodChip.get;
+	}
 }
 
 /** HTTP method for http monitors, otherwise the monitor type. */
@@ -91,8 +121,7 @@ export function TypeChip(handle: Handle<{ monitor: Pick<SelectMonitor, "type" | 
 	return () => {
 		const { monitor } = handle.props;
 		const label = monitor.type === "http" ? monitor.method : monitor.type.toUpperCase();
-		const css = monitor.type === "http" ? `method-${monitor.method.toLowerCase()}` : `method-${monitor.type}`;
-		return <span class={`method-chip ${css}`}>{label}</span>;
+		return <span mix={chipFor(monitor)}>{label}</span>;
 	};
 }
 
@@ -105,7 +134,7 @@ export function ResponseChart(handle: Handle<{ checks: CheckSegment[]; height?: 
 		const points = checks.filter((c) => c.responseTimeMs !== null);
 		if (points.length < 2) {
 			return (
-				<div class="dim" style="padding: 1.5rem 0; text-align: center;">
+				<div mix={emptyChart}>
 					Not enough checks yet to draw response times.
 				</div>
 			);
@@ -121,7 +150,8 @@ export function ResponseChart(handle: Handle<{ checks: CheckSegment[]; height?: 
 				<svg
 					viewBox={`0 0 ${width} ${height}`}
 					preserveAspectRatio="none"
-					style={`width: 100%; height: ${height}px; display: block;`}
+					mix={chartSvg}
+					style={{ height: `${height}px` }}
 					role="img"
 					aria-label={`Response times of the last ${points.length} checks, up to ${max}ms`}
 				>
@@ -131,7 +161,7 @@ export function ResponseChart(handle: Handle<{ checks: CheckSegment[]; height?: 
 						p.status === "down" ? <circle cx={x(i).toFixed(1)} cy={y(p.responseTimeMs ?? 0).toFixed(1)} r="3" fill="var(--down)" /> : null,
 					)}
 				</svg>
-				<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">
+				<div mix={chartLegend}>
 					<span>Older</span>
 					<span>peak {max}ms</span>
 					<span>Latest</span>
@@ -144,7 +174,7 @@ export function ResponseChart(handle: Handle<{ checks: CheckSegment[]; height?: 
 /** A green confirmation banner. */
 export function SuccessNotice(handle: Handle<{ children?: RemixNode }>) {
 	return () => (
-		<div class="alert" role="status" style="border-color: var(--up-border); background: var(--up-bg); color: var(--up);">
+		<div mix={alert.success} role="status">
 			{handle.props.children}
 		</div>
 	);
@@ -152,7 +182,7 @@ export function SuccessNotice(handle: Handle<{ children?: RemixNode }>) {
 
 export function FormErrorSummary() {
 	return () => (
-		<div class="alert alert-error" role="alert">
+		<div mix={alert.error} role="alert">
 			Please fix the highlighted fields.
 		</div>
 	);
@@ -162,7 +192,7 @@ export function FormErrorSummary() {
 export function FieldError(handle: Handle<{ id: string; message?: string }>) {
 	return () =>
 		handle.props.message ? (
-			<p class="form-error" id={handle.props.id}>
+			<p mix={formError} id={handle.props.id}>
 				{handle.props.message}
 			</p>
 		) : null;

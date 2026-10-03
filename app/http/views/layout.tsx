@@ -6,7 +6,22 @@
 import { unsafeHTML, type Handle, type RemixNode } from "remix/component";
 import { clientScript } from "~/app/http/views/client-script";
 import { CREATE_DIALOG_ID, MonitorDialog, type ChannelOption, type MonitorFormState } from "~/app/http/views/monitor-form-dialog";
-import { stylesheet } from "~/app/http/views/styles";
+import {
+	brand,
+	brandGroup,
+	brandLogo,
+	button,
+	globalStylesheet,
+	headerActions,
+	headerContainer,
+	navItem,
+	navItemActive,
+	navMenu,
+	pageMain,
+	siteFooter,
+	siteHeader,
+	tooltip,
+} from "~/app/http/views/styles";
 import routes from "~/routes/web";
 
 export interface LayoutProps {
@@ -36,7 +51,7 @@ const adminNavigation = [
 ];
 
 // Both are constants from this codebase, never request data, so they can go in unescaped.
-const stylesheetHtml = unsafeHTML(stylesheet);
+const stylesheetHtml = unsafeHTML(globalStylesheet);
 const clientScriptHtml = unsafeHTML(clientScript);
 
 export function Layout(handle: Handle<LayoutProps>) {
@@ -63,12 +78,12 @@ export function Layout(handle: Handle<LayoutProps>) {
 					<style innerHTML={stylesheetHtml} />
 				</head>
 				<body>
-					<header>
-						<div class="header-container">
-							<div style="display: flex; align-items: center; gap: 1.25rem;">
-								<a href={brandHref} class="brand">
+					<header mix={siteHeader}>
+						<div mix={headerContainer}>
+							<div mix={brandGroup}>
+								<a href={brandHref} mix={brand}>
 									{props.brand?.logoUrl ? (
-										<img src={props.brand.logoUrl} alt="" style="height: 22px; max-width: 120px; object-fit: contain;" />
+										<img src={props.brand.logoUrl} alt="" mix={brandLogo} />
 									) : (
 										<svg
 											width="18"
@@ -88,19 +103,19 @@ export function Layout(handle: Handle<LayoutProps>) {
 							</div>
 
 							{isAdmin ? (
-								<div style="display: flex; align-items: center; gap: 1rem;">
-									<nav class="nav-menu">
+								<div mix={headerActions}>
+									<nav mix={navMenu}>
 										{adminNavigation.map((item) => (
-											<a key={item.href} href={item.href} class={`nav-item ${props.currentPath === item.href ? "active" : ""}`}>
+											<a key={item.href} href={item.href} mix={props.currentPath === item.href ? navItemActive : navItem}>
 												{item.label}
 											</a>
 										))}
-										<a href={routes.status.href()} class="nav-item" target="_blank" rel="noopener">
+										<a href={routes.status.href()} mix={navItem} target="_blank" rel="noopener">
 											Status page ↗
 										</a>
 									</nav>
 
-									<button type="button" class="btn btn-primary" data-dialog-open={CREATE_DIALOG_ID}>
+									<button type="button" mix={button.primary} data-dialog-open={CREATE_DIALOG_ID}>
 										+ New monitor
 									</button>
 								</div>
@@ -108,14 +123,14 @@ export function Layout(handle: Handle<LayoutProps>) {
 						</div>
 					</header>
 
-					<main>{props.children}</main>
+					<main mix={pageMain}>{props.children}</main>
 
-					<footer>{props.footer ?? "Checks run every minute on Cloudflare Workers"}</footer>
+					<footer mix={siteFooter}>{props.footer ?? "Checks run every minute on Cloudflare Workers"}</footer>
 
 					{isAdmin ? <MonitorDialog mode="create" form={props.addMonitorForm} channels={props.channels} /> : null}
 
 					{/* Tooltip for segmented timelines */}
-					<div id="proto-tooltip"></div>
+					<div id="proto-tooltip" mix={tooltip}></div>
 
 					<script innerHTML={clientScriptHtml} />
 				</body>
