@@ -7,10 +7,12 @@ import type { JobMiddleware } from "@sdxc/jobs";
 import { createContextKey } from "remix/router";
 import type { AppDatabase } from "~/app/contracts/database";
 import type { AlertSettings } from "~/app/services/alerting";
+import type { RegionalProbes } from "~/app/services/regional-probes";
 
 export interface JobServices {
 	db: AppDatabase;
 	alerts?: AlertSettings;
+	probes?: RegionalProbes;
 }
 
 export const JobServicesKey = createContextKey<JobServices>();

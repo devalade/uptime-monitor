@@ -51,8 +51,8 @@ describe("confirming failures before alerting", () => {
 		const { monitor: updated, outcome } = await checkMonitor(db, monitor, undefined, noDelay);
 
 		assert.equal(updated.last_status, "down");
-		assert.equal(outcome.statusCode, null);
-		assert.match(outcome.errorMessage ?? "", /fetch failed/);
+		assert.equal(outcome?.statusCode, null);
+		assert.match(outcome?.errorMessage ?? "", /fetch failed/);
 	});
 
 	test("during a confirmed outage each check runs once and does not re-alert", async () => {

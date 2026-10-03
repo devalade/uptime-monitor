@@ -4,9 +4,9 @@
  */
 
 import type { DashboardMonitor } from "~/app/services/monitor-service";
-import type { AddMonitorFormState } from "~/app/http/views/add-monitor-dialog";
+import type { ChannelOption, MonitorFormState } from "~/app/http/views/monitor-form-dialog";
 import { renderLayout } from "~/app/http/views/layout";
-import { escapeHtml, formatPercentage, renderTime, renderTimeline } from "~/app/http/views/html";
+import { escapeHtml, formatPercentage, renderTime, renderTimeline, renderTypeChip } from "~/app/http/views/html";
 import routes from "~/routes/web";
 
 export const TIMELINE_LENGTH = 45;
@@ -18,24 +18,12 @@ export function parseDashboardFilter(raw: string | null): DashboardFilter {
 	return dashboardFilters.find((filter) => filter === raw) ?? "all";
 }
 
-export type DashboardNotice =
-	| { kind: "test-alert-sent" }
-	| { kind: "test-alert-failed"; detail: string }
-	| { kind: "alerts-off" };
-
-export function parseDashboardNotice(params: URLSearchParams): DashboardNotice | undefined {
-	const kind = params.get("notice");
-	if (kind === "test-alert-sent" || kind === "alerts-off") return { kind };
-	if (kind === "test-alert-failed") return { kind, detail: params.get("detail") ?? "Unknown error" };
-	return undefined;
-}
-
 export interface DashboardViewProps {
 	monitors: DashboardMonitor[];
 	filter: DashboardFilter;
 	alertsEnabled: boolean;
-	notice?: DashboardNotice;
-	form?: AddMonitorFormState;
+	form?: MonitorFormState;
+	channels?: ChannelOption[];
 }
 
 function displayStatus(entry: DashboardMonitor): "up" | "down" | "degraded" | "paused" | "pending" {
@@ -132,15 +120,13 @@ export function renderDashboardView(props: DashboardViewProps): string {
 			}
 		</style>
 
-		${renderNotice(props.notice)}
-
 		${
 			props.alertsEnabled
 				? ""
 				: `<div class="alert alert-warning">
 				<b>Alerts are off.</b> Checks still run, but nobody is notified when a monitor goes down.
-				Set the <code>ALERT_WEBHOOK_URL</code> secret to a Discord, Slack or ntfy.sh URL
-				(<code>npx wrangler secret put ALERT_WEBHOOK_URL</code>), or configure <code>ALERT_EMAIL</code>.
+				<a href="${routes.alertChannels.href()}" style="color: inherit; text-decoration: underline;">Add an alert channel</a>
+				(Discord, Slack, ntfy.sh, Telegram, PagerDuty or any webhook).
 			</div>`
 		}
 
@@ -225,18 +211,8 @@ export function renderDashboardView(props: DashboardViewProps): string {
 		children: content,
 		currentPath: routes.home.href(),
 		addMonitorForm: props.form,
+		channels: props.channels,
 	});
-}
-
-function renderNotice(notice?: DashboardNotice): string {
-	if (!notice) return "";
-	if (notice.kind === "test-alert-sent") {
-		return `<div class="alert" role="status" style="border-color: var(--up-border); background: var(--up-bg); color: var(--up);">Test alert sent. Check your notification channel.</div>`;
-	}
-	if (notice.kind === "test-alert-failed") {
-		return `<div class="alert alert-error" role="alert"><b>Test alert failed.</b> ${escapeHtml(notice.detail)}</div>`;
-	}
-	return `<div class="alert alert-error" role="alert">No alert channel is configured, so there is nothing to test.</div>`;
 }
 
 function renderMonitorRow(entry: DashboardMonitor): string {
@@ -246,7 +222,6 @@ function renderMonitorRow(entry: DashboardMonitor): string {
 	const dotClass = status === "pending" ? "paused" : status;
 	const detailHref = routes.monitor.href({ id: m.id });
 
-	const methodClass = `method-${m.method.toLowerCase()}`;
 	const latencyDisplay = m.last_response_time_ms !== null ? `${m.last_response_time_ms}ms` : "—";
 	const latencyColor =
 		status === "down" ? "var(--down)" : status === "degraded" ? "var(--degraded)" : status === "up" ? "var(--up)" : "var(--text-muted)";
@@ -254,7 +229,9 @@ function renderMonitorRow(entry: DashboardMonitor): string {
 	const summary = isPaused
 		? "Paused"
 		: status === "pending"
-			? "Waiting for first check"
+			? m.type === "heartbeat"
+				? "Waiting for first ping"
+				: "Waiting for first check"
 			: `${formatPercentage(entry.uptimePercentage24h)} uptime (24h)`;
 
 	return `
@@ -265,11 +242,12 @@ function renderMonitorRow(entry: DashboardMonitor): string {
 					<a href="${detailHref}" style="font-weight: 600; color: var(--text-primary); font-size: 0.8125rem;">
 						${escapeHtml(m.name)}
 					</a>
-					<span class="method-chip ${methodClass}">${escapeHtml(m.method)}</span>
+					${renderTypeChip(m)}
 					${m.is_public ? "" : `<span class="badge badge-pending" title="Hidden from the public status page">Private</span>`}
+					${entry.inMaintenance ? `<span class="badge badge-maintenance" title="In a maintenance window: no alerts">Maintenance</span>` : ""}
 				</div>
 				<div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-					${escapeHtml(m.url)}
+					${m.type === "heartbeat" ? (m.last_ping_at ? `Last ping ${renderTime(m.last_ping_at)}` : "Waiting for the first ping") : escapeHtml(m.url)}
 				</div>
 			</div>
 
@@ -284,10 +262,10 @@ function renderMonitorRow(entry: DashboardMonitor): string {
 
 			<div>
 				<div style="font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: ${latencyColor};">
-					${latencyDisplay}
+					${m.type === "heartbeat" ? (status === "down" ? "Late" : status === "pending" ? "—" : "On time") : latencyDisplay}
 				</div>
 				<div style="font-size: 10px; color: var(--text-dim);">
-					${m.last_checked_at ? renderTime(m.last_checked_at) : `Expects ${m.expected_status}`}
+					${m.last_checked_at ? renderTime(m.last_checked_at) : m.type === "http" ? `Expects ${escapeHtml(m.expected_statuses)}` : ""}
 				</div>
 			</div>
 

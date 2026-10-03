@@ -2,7 +2,7 @@
  * Cloudflare Configuration using the typed cloudflare.config.ts format for the new `cf` CLI.
  */
 
-import { defineConfig, bindings, triggers } from "@cloudflare/config";
+import { defineConfig, bindings, exports, triggers } from "@cloudflare/config";
 
 export default defineConfig({
 	worker: {
@@ -10,6 +10,11 @@ export default defineConfig({
 		entrypoint: "./bootstrap/worker.ts",
 		compatibilityDate: "2026-10-01",
 		compatibilityFlags: ["nodejs_compat"],
+
+		// Regional probes: failures are re-checked from other regions before anyone is paged.
+		exports: {
+			RegionalProbe: exports.durableObject({ storage: "sqlite" }),
+		},
 
 		env: {
 			DB: bindings.d1({
@@ -19,6 +24,9 @@ export default defineConfig({
 			KV: bindings.kv({
 				id: process.env.KV_NAMESPACE_ID || "823f05e1cfef44e08dc6a1b1233dc1ec",
 			}),
+			PROBE: bindings.durableObject({ worker: "uptime-monitor", exportName: "RegionalProbe" }),
+			// Durable Object location hints to confirm failures from.
+			PROBE_REGIONS: bindings.text(process.env.PROBE_REGIONS || "enam,weur,apac"),
 			APP_ENV: bindings.text(process.env.APP_ENV || "development"),
 			APP_URL: bindings.text(process.env.APP_URL || "http://localhost:8787"),
 			MAIL_FROM: bindings.text(process.env.MAIL_FROM || "alerts@uptime.local"),

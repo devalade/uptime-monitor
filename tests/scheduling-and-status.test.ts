@@ -40,7 +40,7 @@ describe("public status page", () => {
 		const internal = await addMonitor(db, { name: "Internal admin" });
 		await toggleMonitorVisibility(db, internal.id);
 
-		const data = await getPublicStatusPageData(db, 60);
+		const data = await getPublicStatusPageData(db);
 
 		assert.deepEqual(data.services.map((s) => s.name), ["Website"]);
 	});
@@ -51,7 +51,7 @@ describe("public status page", () => {
 		stubFetch({ site: [serverError] });
 		await checkMonitor(db, internal, undefined, { confirmFailureDelayMs: 0 });
 
-		const data = await getPublicStatusPageData(db, 60);
+		const data = await getPublicStatusPageData(db);
 
 		assert.equal(data.systemStatus, "operational");
 		assert.equal(data.activeIncidents.length, 0);
@@ -63,7 +63,7 @@ describe("public status page", () => {
 		stubFetch({ site: [serverError] });
 		await checkMonitor(db, site, undefined, { confirmFailureDelayMs: 0 });
 
-		const data = await getPublicStatusPageData(db, 60);
+		const data = await getPublicStatusPageData(db);
 
 		assert.equal(data.systemStatus, "outage");
 		assert.deepEqual(Object.keys(data.activeIncidents[0]).sort(), ["id", "monitorName", "resolvedAt", "startedAt"]);
@@ -73,13 +73,13 @@ describe("public status page", () => {
 		const db = await createTestDatabase();
 		const site = await addMonitor(db);
 
-		assert.equal((await getPublicStatusPageData(db, 60)).services[0].uptimePercentage24h, null);
+		assert.equal((await getPublicStatusPageData(db)).services[0].uptimePercentage24h, null);
 
 		stubFetch({ site: [ok] });
 		await checkMonitor(db, site, undefined, { confirmFailureDelayMs: 0 });
-		const service = (await getPublicStatusPageData(db, 60)).services[0];
+		const service = (await getPublicStatusPageData(db)).services[0];
 
 		assert.equal(service.uptimePercentage24h, 100);
-		assert.equal(service.recentChecks.length, 1);
+		assert.equal(service.dailyUptime.length, 90);
 	});
 });

@@ -7,5 +7,5 @@ import { runSweep } from "~/app/services/monitor-service";
 import jobs from "~/app/jobs/definitions";
 
 export default createJobHandler(jobs.sweepMonitors, async (ctx) => {
-	await runSweep(ctx.services.db, ctx.services.alerts);
+	await runSweep(ctx.services.db, ctx.services.alerts, Date.now(), { probes: ctx.services.probes });
 });

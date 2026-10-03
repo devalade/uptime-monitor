@@ -1,17 +1,16 @@
 /**
  * Public Status Page controller for GET /status.
- * Renders live system health, component uptime bars, and public incident history.
+ * Renders live system health, daily uptime bars, announcements, maintenance and incident history.
  * Employs Cloudflare Edge caching with stale-while-revalidate.
  */
 
 import { createAction } from "remix/router";
 import { getPublicStatusPageData } from "~/app/services/monitor-service";
-import { renderStatusPageView, TIMELINE_LENGTH } from "~/app/http/views/status-page-view";
+import { renderStatusPageView } from "~/app/http/views/status-page-view";
 import routes from "~/routes/web";
 
 export default createAction(routes.status, async (ctx) => {
-	const db = ctx.db;
-	const data = await getPublicStatusPageData(db, TIMELINE_LENGTH);
+	const data = await getPublicStatusPageData(ctx.db, { days: 90 });
 	const html = renderStatusPageView(data);
 
 	return ctx.render(html, {

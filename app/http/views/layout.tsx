@@ -4,7 +4,7 @@
  * Pure edge-rendered HTML/CSS, zero client hydration bundle, crisp typography, and responsive grid.
  */
 
-import { renderAddMonitorDialog, type AddMonitorFormState } from "~/app/http/views/add-monitor-dialog";
+import { renderMonitorDialog, type ChannelOption, type MonitorFormState } from "~/app/http/views/monitor-form-dialog";
 import { escapeHtml } from "~/app/http/views/html";
 import routes from "~/routes/web";
 
@@ -14,7 +14,13 @@ export interface LayoutProps {
 	currentPath?: string;
 	/** Public pages get no admin navigation or controls. */
 	variant?: "admin" | "public";
-	addMonitorForm?: AddMonitorFormState;
+	addMonitorForm?: MonitorFormState;
+	/** Alert channels offered in the "New monitor" dialog. */
+	channels?: ChannelOption[];
+	/** Extra tags for the document head, e.g. a feed link. */
+	head?: string;
+	/** Footer HTML; defaults to a note about the check schedule. */
+	footer?: string;
 }
 
 export function renderLayout(props: LayoutProps): string {
@@ -28,6 +34,7 @@ export function renderLayout(props: LayoutProps): string {
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+	${props.head ?? ""}
 	<style>
 		:root {
 			--bg-root: #0d1117;
@@ -348,6 +355,8 @@ export function renderLayout(props: LayoutProps): string {
 			padding: 1.5rem;
 			width: 92%;
 			max-width: 480px;
+			max-height: 90vh;
+			overflow-y: auto;
 			box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
 		}
 
@@ -438,13 +447,39 @@ export function renderLayout(props: LayoutProps): string {
 		.form-control[aria-invalid="true"] { border-color: var(--down); }
 		.label-hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-dim); }
 		.checkbox { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 1rem; cursor: pointer; }
+		.advanced { margin-bottom: 0.75rem; }
 		.advanced summary { cursor: pointer; font-size: 0.75rem; color: var(--text-muted); }
+		dialog.monitor-dialog { max-width: 560px; }
+		textarea.form-control { resize: vertical; font-family: var(--font-mono); font-size: 0.75rem; }
+		.form-help { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.375rem; line-height: 1.5; }
+		.fieldset-legend { font-size: 0.75rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+		[hidden] { display: none !important; }
+		.page-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; }
+		.page-subtitle { font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.125rem; }
+		.page-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+		.card { background: var(--bg-surface); border: 1px solid var(--border-medium); border-radius: 6px; padding: 1.25rem; margin-bottom: 1.25rem; }
+		.card h2 { font-size: 0.9375rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.875rem; }
+		.list-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding: 0.875rem 0; border-bottom: 1px solid var(--border-subtle); }
+		.list-row:last-child { border-bottom: none; }
+		.muted { color: var(--text-muted); }
+		.dim { color: var(--text-dim); font-size: 0.75rem; }
+		.mono { font-family: var(--font-mono); }
+		.copy-field { display: flex; gap: 0.5rem; align-items: center; }
+		.copy-field code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; background: var(--bg-root); border: 1px solid var(--border-medium); border-radius: 4px; padding: 0.4375rem 0.625rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-primary); }
+		.badge-maintenance { background: var(--brand-bg); color: var(--brand); border: 1px solid rgba(56, 139, 253, 0.35); }
+		.tick.maintenance { background: var(--brand); }
+		.method-tcp { background: rgba(219, 109, 40, 0.15); color: #f0883e; border: 1px solid rgba(219, 109, 40, 0.3); }
+		.method-heartbeat { background: rgba(219, 97, 162, 0.15); color: #f778ba; border: 1px solid rgba(219, 97, 162, 0.3); }
+		.method-put, .method-patch { background: rgba(210, 153, 34, 0.15); color: #e3b341; border: 1px solid rgba(210, 153, 34, 0.3); }
+		.method-delete { background: var(--down-bg); color: #ff7b72; border: 1px solid var(--down-border); }
 
 		@media (max-width: 720px) {
 			.header-container { padding: 0.625rem 1rem; }
 			.brand-badge { display: none; }
 			main { padding: 1rem 1rem 3rem; }
 			.form-row { grid-template-columns: 1fr; }
+			.header-container { height: auto; flex-wrap: wrap; gap: 0.5rem; }
+			.nav-menu { flex-wrap: wrap; }
 		}
 	</style>
 </head>
@@ -462,8 +497,15 @@ export function renderLayout(props: LayoutProps): string {
 				isAdmin
 					? `<div style="display: flex; align-items: center; gap: 1rem;">
 				<nav class="nav-menu">
-					<a href="${routes.home.href()}" class="nav-item ${props.currentPath === routes.home.href() ? "active" : ""}">Dashboard</a>
-					<a href="${routes.status.href()}" class="nav-item" target="_blank" rel="noopener">Public status page ↗</a>
+					${[
+						{ href: routes.home.href(), label: "Dashboard" },
+						{ href: routes.statusPosts.href(), label: "Incidents" },
+						{ href: routes.maintenance.href(), label: "Maintenance" },
+						{ href: routes.alertChannels.href(), label: "Alerts" },
+					]
+						.map((item) => `<a href="${item.href}" class="nav-item ${props.currentPath === item.href ? "active" : ""}">${item.label}</a>`)
+						.join("")}
+					<a href="${routes.status.href()}" class="nav-item" target="_blank" rel="noopener">Status page ↗</a>
 				</nav>
 
 				<button type="button" class="btn btn-primary" data-dialog-open="add-monitor-modal">
@@ -480,10 +522,10 @@ export function renderLayout(props: LayoutProps): string {
 	</main>
 
 	<footer>
-		Checks run every minute on Cloudflare Workers
+		${props.footer ?? "Checks run every minute on Cloudflare Workers"}
 	</footer>
 
-	${isAdmin ? renderAddMonitorDialog(props.addMonitorForm) : ""}
+	${isAdmin ? renderMonitorDialog({ mode: "create", form: props.addMonitorForm, channels: props.channels }) : ""}
 
 	<!-- Tooltip for segmented timelines -->
 	<div id="proto-tooltip"></div>
@@ -517,6 +559,35 @@ export function renderLayout(props: LayoutProps): string {
 				button.disabled = true;
 				button.textContent = button.dataset.busy;
 			}
+		});
+
+		// Monitor forms show only the fields of the chosen type
+		document.querySelectorAll("form[data-monitor-form]").forEach((form) => {
+			const typeSelect = form.querySelector("select[name=type]");
+			const sync = () => {
+				form.querySelectorAll("[data-type-section]").forEach((section) => {
+					section.hidden = !section.getAttribute("data-type-section").split(" ").includes(typeSelect.value);
+				});
+			};
+			typeSelect.addEventListener("change", sync);
+			sync();
+		});
+
+		// Copy buttons
+		document.querySelectorAll("[data-copy]").forEach((button) => {
+			button.addEventListener("click", async () => {
+				try {
+					await navigator.clipboard.writeText(button.getAttribute("data-copy"));
+					const label = button.textContent;
+					button.textContent = "Copied";
+					setTimeout(() => (button.textContent = label), 1500);
+				} catch {}
+			});
+		});
+
+		// datetime-local inputs carry no time zone, so send the browser's offset along
+		document.querySelectorAll("input[name=tz_offset]").forEach((input) => {
+			input.value = String(new Date().getTimezoneOffset());
 		});
 
 		// Local times

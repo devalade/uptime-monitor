@@ -12,6 +12,10 @@
 			"migrations_dir": "./database/migrations"
 		}
 	],
+	"durable_objects": {
+		"bindings": [{ "name": "PROBE", "class_name": "RegionalProbe" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["RegionalProbe"] }],
 	"kv_namespaces": [
 		{
 			"binding": "KV",
@@ -25,6 +29,7 @@
 		"APP_ENV": "development",
 		"APP_URL": "http://localhost:8787",
 		"MAIL_FROM": "alerts@uptime.local",
+		"PROBE_REGIONS": "enam,weur,apac",
 		"SESSION_SECRET": "uptime-monitor-session-secret-at-least-32-chars-long"
 		// "ALERT_EMAIL": "you@example.com"  (must be a verified Email Routing destination)
 		// Cloudflare Access protecting the admin pages (Zero Trust → Access → Applications):

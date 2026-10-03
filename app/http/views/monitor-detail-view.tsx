@@ -3,12 +3,34 @@
  * Displays real-time status, latency metrics, recent check history, and incidents log.
  */
 
-import type { MonitorDetailData } from "~/app/services/monitor-service";
+import { formatSeconds, type MonitorDetailData } from "~/app/services/monitor-service";
+import type { UptimePeriod } from "~/app/services/uptime-stats";
 import { renderLayout } from "~/app/http/views/layout";
-import { escapeHtml, formatPercentage, renderTime } from "~/app/http/views/html";
+import { escapeHtml, formatDuration, formatPercentage, renderResponseChart, renderTime, renderTypeChip } from "~/app/http/views/html";
+import {
+	EDIT_DIALOG_ID,
+	renderMonitorDialog,
+	type ChannelOption,
+	type MonitorFormState,
+} from "~/app/http/views/monitor-form-dialog";
+import { settingsToFormValues } from "~/app/services/monitor-input";
+import { monitorSettings } from "~/app/services/monitor-service";
+import { parseIdList } from "~/app/services/alerting";
+import type { SelectMonitor } from "~/database/schema";
 import routes from "~/routes/web";
 
-export function renderMonitorDetailView(data: MonitorDetailData): string {
+export interface MonitorDetailViewProps {
+	data: MonitorDetailData;
+	uptime: Record<UptimePeriod, number | null>;
+	channels: ChannelOption[];
+	/** Full URL heartbeat jobs call; set for heartbeat monitors. */
+	pingUrl?: string;
+	/** A rejected edit, re-shown in the open dialog. */
+	editForm?: MonitorFormState;
+}
+
+export function renderMonitorDetailView(props: MonitorDetailViewProps): string {
+	const data = props.data;
 	const m = data.monitor;
 	const isPaused = !m.is_enabled;
 	const status = isPaused ? "paused" : m.last_status ?? "pending";
@@ -27,17 +49,6 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 		: m.next_due_at
 			? `Next check around ${renderTime(Math.max(m.next_due_at, Date.now()))}`
 			: "Next check within a minute";
-	const uptimeColor =
-		data.uptimePercentage24h === null
-			? "var(--text-muted)"
-			: data.uptimePercentage24h >= 99
-				? "var(--up)"
-				: data.uptimePercentage24h >= 95
-					? "var(--degraded)"
-					: "var(--down)";
-
-	const methodLower = (m.method || "get").toLowerCase();
-	const methodClass = `method-${methodLower}`;
 
 	const content = `
 		<div style="margin-bottom: 1.5rem;">
@@ -56,18 +67,26 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 							${status !== "pending" && !isPaused ? '<span class="dot-pulse"></span>' : ""}
 							${isPaused ? "PAUSED" : status.toUpperCase()}
 						</span>
-						<span class="method-chip ${methodClass}">${escapeHtml(m.method)}</span>
+						${renderTypeChip(m)}
+						${data.inMaintenance ? `<span class="badge badge-maintenance">Maintenance</span>` : ""}
 					</div>
 					<h1 style="font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; color: #fff; margin-bottom: 0.375rem;">${escapeHtml(m.name)}</h1>
 					<p style="font-family: var(--font-mono); font-size: 0.875rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
-						<a href="${/^https?:\/\//i.test(m.url) ? escapeHtml(m.url) : "#"}" target="_blank" rel="noopener" style="color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px;">
+						${
+							m.type === "http"
+								? `<a href="${/^https?:\/\//i.test(m.url) ? escapeHtml(m.url) : "#"}" target="_blank" rel="noopener" style="color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px;">
 							${escapeHtml(m.url)}
 						</a>
-						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-dim);"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-dim);"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`
+								: m.type === "tcp"
+									? `<span style="color: var(--text-secondary);">tcp://${escapeHtml(m.url)}</span>`
+									: `<span>Heartbeat monitor</span>`
+						}
 					</p>
 				</div>
 
 				<div style="display: flex; gap: 0.625rem; flex-wrap: wrap;">
+					<button type="button" class="btn btn-secondary btn-sm" data-dialog-open="${EDIT_DIALOG_ID}">Edit</button>
 					<form method="POST" action="${routes.checkMonitor.href({ id: m.id })}">
 						<button type="submit" class="btn btn-primary btn-sm" data-busy="Checking…">
 							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
@@ -98,11 +117,15 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 			</div>
 		</div>
 
+		${data.inMaintenance ? `<div class="alert" style="border-color: rgba(56, 139, 253, 0.35); background: var(--brand-bg); color: var(--brand);">This monitor is in a maintenance window. Checks still run, but no incident is opened and nobody is alerted.</div>` : ""}
+
+		${m.type === "heartbeat" ? renderHeartbeatSetup(m, props.pingUrl) : ""}
+
 		<!-- Bento Stats -->
 		<section class="stats-grid">
 			<div class="stat-card">
 				<div class="stat-label">24h Uptime</div>
-				<div class="stat-value" style="color: ${uptimeColor};">
+				<div class="stat-value" style="color: ${uptimeColor(data.uptimePercentage24h)};">
 					${formatPercentage(data.uptimePercentage24h)}
 				</div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
@@ -111,20 +134,36 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 			</div>
 
 			<div class="stat-card">
+				<div class="stat-label">Uptime 7 / 30 / 90 days</div>
+				<div style="display: flex; gap: 1rem; margin-top: 0.625rem; font-family: var(--font-mono); font-size: 1.0625rem; font-weight: 700;">
+					${([7, 30, 90] as const)
+						.map((days) => `<span style="color: ${uptimeColor(props.uptime[days])};" title="Last ${days} days">${formatPercentage(props.uptime[days])}</span>`)
+						.join("")}
+				</div>
+				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
+					From daily totals, updated hourly
+				</div>
+			</div>
+
+			${
+				m.type === "heartbeat"
+					? `<div class="stat-card">
+				<div class="stat-label">Last ping</div>
+				<div class="stat-value" style="font-size: 1.125rem; margin-top: 0.75rem; font-family: var(--font-mono); color: var(--text-secondary);">
+					${m.last_ping_at ? renderTime(m.last_ping_at) : "Never"}
+				</div>
+				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
+					Expected every ${formatSeconds(m.interval_seconds)}, ${formatSeconds(m.grace_seconds)} grace
+				</div>
+			</div>`
+					: `<div class="stat-card">
 				<div class="stat-label">Average response</div>
 				<div class="stat-value">${data.averageLatencyMs}<span style="font-size: 1rem; color: var(--text-muted); margin-left: 4px; font-weight: 500;">ms</span></div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
 					Over the last ${data.results.length} checks
 				</div>
-			</div>
-
-			<div class="stat-card">
-				<div class="stat-label">Check Frequency</div>
-				<div class="stat-value">${m.interval_seconds}<span style="font-size: 1rem; color: var(--text-muted); margin-left: 4px; font-weight: 500;">sec</span></div>
-				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
-					Timeout ${m.timeout_seconds}s · expects HTTP ${m.expected_status} · slow after ${m.degraded_after_ms}ms
-				</div>
-			</div>
+			</div>`
+			}
 
 			<div class="stat-card">
 				<div class="stat-label">Last Checked</div>
@@ -135,6 +174,30 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					${nextCheck}
 				</div>
 			</div>
+		</section>
+
+		<section class="card" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem;">
+			<div>
+				<h2>Settings</h2>
+				<dl class="settings-list">
+					${describeSettings(m)
+						.map(([term, detail]) => `<div><dt>${term}</dt><dd>${detail}</dd></div>`)
+						.join("")}
+				</dl>
+			</div>
+			${
+				m.type === "heartbeat"
+					? ""
+					: `<div>
+				<h2>Response time</h2>
+				${renderResponseChart([...data.results].reverse().map((r) => ({
+					status: !r.is_up ? "down" : r.error_message ? "degraded" : "up",
+					checkedAt: r.created_at,
+					responseTimeMs: r.response_time_ms,
+					statusCode: r.response_status,
+				})))}
+			</div>`
+			}
 		</section>
 
 		<!-- Incidents Section -->
@@ -211,7 +274,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					<tbody>
 						${
 							data.results.length === 0
-								? `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">No probes recorded yet. Click "Check Now" above to run an instant health check.</td></tr>`
+								? `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">${m.type === "heartbeat" ? "No pings recorded yet." : 'No probes recorded yet. Click "Check Now" above to run an instant health check.'}</td></tr>`
 								: data.results
 										.map((r) => {
 											const badge = !r.is_up
@@ -229,7 +292,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 											return `
 								<tr>
 									<td style="font-family: var(--font-mono); font-size: 0.8125rem; color: var(--text-secondary);">${renderTime(r.created_at)}</td>
-									<td>${badge}</td>
+									<td>${badge}${r.is_maintenance ? ' <span class="badge badge-maintenance" title="During maintenance: not counted in uptime">MAINT</span>' : ""}</td>
 									<td style="font-family: var(--font-mono); font-weight: 600;">${r.response_status ?? "-"}</td>
 									<td style="font-family: var(--font-mono); font-weight: 600; ${latencyClass}">
 										${r.response_time_ms !== null ? `${r.response_time_ms}ms` : "-"}
@@ -250,17 +313,80 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 
 	return renderLayout({
 		title: m.name,
-		children: content,
+		children: `
+			<style>
+				.settings-list { display: grid; gap: 0.5rem; font-size: 0.8125rem; }
+				.settings-list div { display: grid; grid-template-columns: 140px 1fr; gap: 0.75rem; }
+				.settings-list dt { color: var(--text-muted); }
+				.settings-list dd { color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.75rem; word-break: break-word; }
+			</style>
+			${content}
+			${renderMonitorDialog({
+				mode: "edit",
+				monitorId: m.id,
+				initialValues: settingsToFormValues(monitorSettings(m)),
+				form: props.editForm,
+				channels: props.channels,
+			})}`,
+		channels: props.channels,
 	});
 }
 
-function formatDuration(ms: number): string {
-	const seconds = Math.floor(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ${minutes % 60}m`;
-	return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+function uptimeColor(value: number | null): string {
+	if (value === null) return "var(--text-muted)";
+	if (value >= 99) return "var(--up)";
+	if (value >= 95) return "var(--degraded)";
+	return "var(--down)";
+}
+
+function renderHeartbeatSetup(m: SelectMonitor, pingUrl: string | undefined): string {
+	if (!pingUrl) return "";
+	const failUrl = `${pingUrl}/fail`;
+	const curl = `curl -fsS -m 10 --retry 3 ${pingUrl}`;
+	return `
+		<section class="card">
+			<h2>Ping this URL from your job</h2>
+			<p class="muted" style="font-size: 0.8125rem; margin-bottom: 0.75rem;">
+				Call it each time the job succeeds. ${m.last_ping_at ? "" : "The monitor stays pending until the first ping, so nobody is paged before you set it up."}
+				Keep it secret: anyone with the URL can report in.
+			</p>
+			<div class="copy-field" style="margin-bottom: 0.5rem;">
+				<code>${escapeHtml(pingUrl)}</code>
+				<button type="button" class="btn btn-secondary btn-sm" data-copy="${escapeHtml(pingUrl)}">Copy</button>
+			</div>
+			<div class="copy-field" style="margin-bottom: 0.5rem;">
+				<code>${escapeHtml(curl)}</code>
+				<button type="button" class="btn btn-secondary btn-sm" data-copy="${escapeHtml(curl)}">Copy</button>
+			</div>
+			<p class="dim">Report a failure straight away with <code class="mono">${escapeHtml(failUrl)}</code>. GET, POST and HEAD all work.</p>
+		</section>`;
+}
+
+/** The monitor's settings as label/value pairs; values are already escaped. */
+function describeSettings(m: SelectMonitor): [string, string][] {
+	const rows: [string, string][] = [];
+	const channels = parseIdList(m.alert_channel_ids);
+
+	if (m.type === "heartbeat") {
+		rows.push(["Expected every", formatSeconds(m.interval_seconds)], ["Grace period", formatSeconds(m.grace_seconds)]);
+	} else {
+		rows.push(["Checked every", formatSeconds(m.interval_seconds)], ["Timeout", `${m.timeout_seconds}s`], ["Slow after", `${m.degraded_after_ms}ms`]);
+	}
+
+	if (m.type === "http") {
+		rows.push(["Accepted status", escapeHtml(m.expected_statuses)]);
+		if (m.request_headers) rows.push(["Headers", `${m.request_headers.split(/\r?\n/).filter((l) => l.trim()).length} custom`]);
+		if (m.request_body) rows.push(["Body", `${m.request_body.length} characters`]);
+		if (m.keyword) rows.push([m.keyword_mode === "not_contains" ? "Must not contain" : "Must contain", escapeHtml(`"${m.keyword}"`)]);
+		if (m.json_path) rows.push(["JSON check", escapeHtml(m.json_expected ? `${m.json_path} = ${m.json_expected}` : `${m.json_path} exists`)]);
+	}
+
+	rows.push(
+		["Goes down after", `${m.failure_threshold} failed check${m.failure_threshold === 1 ? "" : "s"}`],
+		["Reminders", m.reminder_minutes > 0 ? `every ${formatSeconds(m.reminder_minutes * 60)}` : "off"],
+		["Alerts", channels === null ? "every channel" : `${channels.length} selected channel${channels.length === 1 ? "" : "s"}`],
+		["Status page", m.is_public ? "shown" : "hidden"],
+	);
+	return rows;
 }
 

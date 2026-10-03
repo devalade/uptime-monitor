@@ -4,24 +4,21 @@
  */
 
 import { createAction } from "remix/router";
+import { loadChannelOptions } from "~/app/http/pages";
 import { getDashboardData } from "~/app/services/monitor-service";
-import {
-	parseDashboardFilter,
-	parseDashboardNotice,
-	renderDashboardView,
-	TIMELINE_LENGTH,
-} from "~/app/http/views/dashboard-view";
+import { parseDashboardFilter, renderDashboardView, TIMELINE_LENGTH } from "~/app/http/views/dashboard-view";
 import routes from "~/routes/web";
 
 export default createAction(routes.home, async (ctx) => {
 	const db = ctx.db;
 	const params = new URL(ctx.request.url).searchParams;
+	const [monitors, channels] = await Promise.all([getDashboardData(db, TIMELINE_LENGTH), loadChannelOptions(db, ctx.alerts)]);
 
 	const html = renderDashboardView({
-		monitors: await getDashboardData(db, TIMELINE_LENGTH),
+		monitors,
 		filter: parseDashboardFilter(params.get("filter")),
-		alertsEnabled: Boolean(ctx.alerts),
-		notice: parseDashboardNotice(params),
+		alertsEnabled: channels.length > 0,
+		channels,
 	});
 
 	return ctx.render(html);

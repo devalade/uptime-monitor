@@ -17,7 +17,7 @@ export default createAction(routes.checkMonitor, async (ctx) => {
 		return new Response("Monitor not found", { status: 404 });
 	}
 
-	await checkMonitor(db, monitor, ctx.alerts);
+	await checkMonitor(db, monitor, ctx.alerts, { probes: ctx.probes });
 
 	return redirectBack(ctx.request, routes.monitor.href({ id }));
 });

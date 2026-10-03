@@ -2,7 +2,7 @@
  * Cloudflare Worker entry point for Uptime Monitor.
  *
  * Handles HTTP requests via Remix 3 fetch-router, and scheduled cron triggers
- * via the background job dispatcher.
+ * via the background job dispatcher. Also exports the regional probe Durable Object.
  */
 
 import * as cloudflare from "@sdxc/jobs/cloudflare";
@@ -11,18 +11,30 @@ import { createAppDatabase, createMemoryDatabase } from "~/app/contracts/databas
 import { createCache } from "~/app/contracts/cache";
 import { createAlertSettings } from "~/app/contracts/alerts";
 import { createAppJobDispatcher } from "~/app/jobs/dispatcher";
+import { createRegionalProbes, parseProbeRegions, type ProbeNamespace } from "~/app/services/regional-probes";
 import application from "~/bootstrap/app";
+
+export { RegionalProbe } from "~/app/probes/regional-probe";
 
 export interface Env {
 	DB?: D1Database;
 	KV?: KVNamespace;
 	EMAIL?: SendEmail;
+	/** Regional probe Durable Objects that confirm failures from other locations. */
+	PROBE?: ProbeNamespace;
+	/** Comma-separated Durable Object location hints, e.g. "enam,weur,apac". */
+	PROBE_REGIONS?: string;
 	MAIL_FROM?: string;
 	ALERT_EMAIL?: string;
+	ALERT_WEBHOOK_URL?: string;
 	ACCESS_TEAM_DOMAIN?: string;
 	ACCESS_AUD?: string;
 	APP_ENV?: string;
 	APP_URL?: string;
+}
+
+function createProbes(env: Env) {
+	return env.PROBE ? createRegionalProbes(env.PROBE, parseProbeRegions(env.PROBE_REGIONS)) : undefined;
 }
 
 export default {
@@ -37,6 +49,7 @@ export default {
 			db,
 			cache,
 			alerts: createAlertSettings(env),
+			probes: createProbes(env),
 			access:
 				env.ACCESS_TEAM_DOMAIN && env.ACCESS_AUD
 					? { teamDomain: env.ACCESS_TEAM_DOMAIN, audience: env.ACCESS_AUD }
@@ -57,6 +70,7 @@ export default {
 			{
 				db,
 				alerts: createAlertSettings(env),
+				probes: createProbes(env),
 			},
 			queue,
 		);

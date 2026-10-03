@@ -36,43 +36,63 @@ An edge-native uptime monitoring service built with **Remix 3** and Sergio Xalam
 
 | Page | Who | What it's for |
 | --- | --- | --- |
-| `/` | Admin (password) | Add, check, pause and delete monitors |
-| `/monitors/:id` | Admin (password) | Uptime, response times, check log and incidents for one monitor |
-| `/status` | Anyone | Public status page to share with your users |
+| `/` | Admin | Add, check, pause and delete monitors |
+| `/monitors/:id` | Admin | Edit a monitor; uptime (24h, 7/30/90 days), response times, settings, checks and incidents |
+| `/incidents` | Admin | Write incidents for the status page and post updates (investigating → resolved) |
+| `/maintenance` | Admin | Schedule maintenance windows |
+| `/alerts` | Admin | Alert channels: webhooks (Discord, Slack, ntfy.sh, JSON), Telegram, PagerDuty |
+| `/status` | Anyone | Public status page with 90-day uptime bars |
+| `/status/feed.xml` | Anyone | RSS feed of incidents and maintenance |
+| `/status/badge/:id.svg` | Anyone | SVG badge for a public monitor; `?type=uptime&days=7\|30\|90` for uptime |
+| `/api/health/ping/:token` | Your jobs | Heartbeat ping (any method); append `/fail` to report a failure |
+
+**Monitor types**
+- **HTTP(S)**: any method, custom headers and body. A check passes when the status is in the
+  accepted list (`200`, `2xx`, `200-299, 301`), the body contains (or does not contain) a keyword,
+  and a JSON path such as `$.status` exists or equals a value.
+- **TCP**: passes when a connection to `host:port` opens (Workers `connect()`; port 25 is blocked).
+- **Heartbeat**: your cron job, backup or worker calls its private ping URL. If no ping arrives
+  within the period plus the grace time, the monitor goes down. It stays pending until the first ping.
 
 **How a check works**
 1. A Cron Trigger fires every minute and checks every enabled monitor that is due.
-2. A check passes when the response status equals the expected status. If it passes but takes
-   longer than the "slow after" threshold, the monitor is marked **degraded**.
-3. A failed check is re-checked 2 seconds later. Only if that also fails does the monitor go
-   down, open an incident and send a DOWN alert, so one-off network blips don't page anyone.
-   The next passing check (up or degraded) resolves the incident and sends a RECOVERED alert.
-4. Check results are kept for 30 days.
+2. A check that passes but takes longer than the "slow after" threshold is marked **degraded**.
+3. A new failure is re-checked from three other Cloudflare regions (Durable Objects pinned with
+   location hints, `PROBE_REGIONS`, default `enam,weur,apac`). The monitor fails only when most
+   locations agree. Without the binding it is re-checked locally 2 seconds later.
+4. The monitor goes down after `failure_threshold` failed checks in a row (default 1), opens an
+   incident and sends a DOWN alert. Optional reminders repeat it every N minutes while it stays down.
+   The next passing check resolves the incident and sends a RECOVERED alert.
+5. During a maintenance window checks still run, but no incident is opened, nobody is alerted
+   and those checks do not count against uptime. An outage that outlasts the window opens an
+   incident once it ends.
+6. Raw check results are kept for 30 days; daily totals (`monitor_daily_stats`, refreshed hourly)
+   are kept for good and power the 7/30/90-day figures and status page bars.
 
 **Access** (Cloudflare Access)
-- The dashboard, monitor pages, `/api/mcp` and `/api/cron/sweep` sit behind a Cloudflare Access
-  application. People sign in through Access; MCP clients and schedulers use an Access service token.
+- The admin pages, `/api/mcp` and `/api/cron/sweep` sit behind a Cloudflare Access application.
+  People sign in through Access; MCP clients and schedulers use an Access service token.
 - The Worker also verifies the `Cf-Access-Jwt-Assertion` token itself (signature, issuer and AUD),
   so a request that skips Access, e.g. via the `workers.dev` URL, gets a 403.
 - Without `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`, the admin pages work on `localhost` only and
   return 503 everywhere else.
-- `/status` and `/api/health` are always public.
+- `/status`, everything under `/status/` and `/api/health` (including `/api/health/ping/*`) are
+  public. They match the paths the public Access application bypasses.
 
 **Public status page**
-Every monitor has a "Show on the public status page" setting (on by default). Hidden monitors
-are marked *Private* on the dashboard. The public page never shows raw error messages, only
-which service is affected and since when.
+Every monitor has a "Show on the public status page" setting. The public page never shows raw
+error messages, only which service is affected and since when. Incidents written on `/incidents`,
+running and upcoming maintenance (next 7 days) and the last 7 days of history are shown too.
 
 **Alerts**
-Alerts go to every channel you configure; the dashboard shows a banner while none is set up.
-- **Webhook** (easiest): `npx wrangler secret put ALERT_WEBHOOK_URL` with an https URL.
-  Discord webhooks, Slack incoming webhooks and `https://ntfy.sh/<topic>` get their native
-  format; any other URL receives JSON (`event`, `monitor`, `status`, `reason`, `timestamp`, `text`).
-- **Email**: set `ALERT_EMAIL` and add a `send_email` binding named `EMAIL` (see `wrangler.jsonc` /
-  `cloudflare.config.ts`). The recipient must be a verified Email Routing destination and
-  `MAIL_FROM` must be on a domain you have in Cloudflare.
+Add channels on `/alerts`; each monitor sends to every channel or only the ones picked in its
+Alerting settings. Channels from the environment still work and show up there read-only:
+- `ALERT_WEBHOOK_URL` secret (https only).
+- `ALERT_EMAIL` with a `send_email` binding named `EMAIL`. The recipient must be a verified Email
+  Routing destination and `MAIL_FROM` must be on a domain you have in Cloudflare.
 
-Use **Send test alert** on the dashboard to confirm delivery; it reports any channel that failed.
+PagerDuty gets one dedup key per monitor, so DOWN and RECOVERED trigger and resolve the same
+PagerDuty incident. Use **Test** on a channel, or **Test every channel**, to confirm delivery.
 
 ---
 
@@ -234,7 +254,11 @@ To connect AI assistants (Claude Desktop, Cursor, Antigravity, etc.) to this upt
 - **Auth**: Access service token headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`
 - **Protocol Version**: `2026-07-28`
 - **Available Tools**:
-  - `list_monitors`: Lists all monitored endpoints and status.
-  - `get_monitor`: Detailed metrics, uptime %, and recent checks for a given monitor ID.
-  - `check_monitor_now`: Probes a monitor on-demand and returns immediate latency.
-  - `create_monitor`: Adds a new HTTP/HTTPS endpoint to be monitored.
+  - `list_monitors`: All monitors with type, status and target.
+  - `get_monitor`: Settings, 24h/7d/30d/90d uptime, recent checks, open incidents, heartbeat ping URL.
+  - `check_monitor_now`: Probes a monitor on demand.
+  - `create_monitor` / `update_monitor`: HTTP, TCP or heartbeat monitors with every setting.
+  - `set_monitor_paused`: Pause or resume a monitor.
+  - `list_incidents`: Detected outages, optionally open only or for one monitor.
+  - `post_status_update`: Open a status page incident or post an update to one.
+  - `schedule_maintenance`: Schedule a maintenance window.

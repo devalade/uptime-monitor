@@ -1,10 +1,11 @@
 /**
  * Create Monitor controller for POST /monitors
- * Handles form submissions to add a new monitored URL. Invalid input re-renders the
+ * Handles form submissions to add a new monitor. Invalid input re-renders the
  * dashboard with the dialog open, the user's values kept and the errors shown.
  */
 
 import { createAction } from "remix/router";
+import { loadChannelOptions } from "~/app/http/pages";
 import { createMonitor, getDashboardData } from "~/app/services/monitor-service";
 import { parseMonitorInput, readMonitorForm } from "~/app/services/monitor-input";
 import { renderDashboardView, TIMELINE_LENGTH } from "~/app/http/views/dashboard-view";
@@ -16,11 +17,13 @@ export default createAction(routes.createMonitor, async (ctx) => {
 	const input = parseMonitorInput(values);
 
 	if (!input.ok) {
+		const channels = await loadChannelOptions(db, ctx.alerts);
 		const html = renderDashboardView({
 			monitors: await getDashboardData(db, TIMELINE_LENGTH),
 			filter: "all",
-			alertsEnabled: Boolean(ctx.alerts),
+			alertsEnabled: channels.length > 0,
 			form: { values, errors: input.errors },
+			channels,
 		});
 		return ctx.render(html, { status: 400 });
 	}

@@ -8,13 +8,24 @@ describe("monitor input", () => {
 
 		assert.ok(result.ok);
 		assert.deepEqual(result.value, {
+			type: "http",
 			name: "api.example.com",
 			url: "https://api.example.com/health",
 			method: "GET",
-			expectedStatus: 200,
+			expectedStatuses: "200",
+			requestHeaders: null,
+			requestBody: null,
+			keyword: null,
+			keywordMode: "contains",
+			jsonPath: null,
+			jsonExpected: null,
 			intervalSeconds: 60,
 			timeoutSeconds: 10,
 			degradedAfterMs: 3000,
+			graceSeconds: 300,
+			failureThreshold: 1,
+			reminderMinutes: 0,
+			alertChannelIds: null,
 			isPublic: true,
 		});
 	});
@@ -30,7 +41,7 @@ describe("monitor input", () => {
 		const result = parseMonitorInput({
 			url: "https://ok.example.com",
 			method: "FOO",
-			expected_status: "abc",
+			expected_statuses: "abc",
 			interval_seconds: "5",
 			timeout_seconds: "99",
 			degraded_after_ms: "1",
@@ -39,7 +50,7 @@ describe("monitor input", () => {
 		assert.ok(!result.ok);
 		assert.deepEqual(Object.keys(result.errors).sort(), [
 			"degraded_after_ms",
-			"expected_status",
+			"expected_statuses",
 			"interval_seconds",
 			"method",
 			"timeout_seconds",

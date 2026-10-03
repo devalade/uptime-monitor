@@ -12,7 +12,16 @@ import type { Middleware } from "remix/router";
 import webRoutes from "~/routes/web";
 import apiRoutes from "~/routes/api";
 
-const publicPaths = new Set([webRoutes.status.href(), apiRoutes.healthcheck.href()]);
+/**
+ * The status page with its feed and badges, the health check and heartbeat pings are public.
+ * They all sit under /status and /api/health, the paths the public Access application bypasses.
+ */
+const publicExactPaths = new Set([webRoutes.status.href(), apiRoutes.healthcheck.href()]);
+const publicPathPrefixes = [`${webRoutes.status.href()}/`, `${apiRoutes.healthcheck.href()}/ping/`];
+
+export function isPublicPath(pathname: string): boolean {
+	return publicExactPaths.has(pathname) || publicPathPrefixes.some((prefix) => pathname.startsWith(prefix));
+}
 
 const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -34,7 +43,7 @@ const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 export function adminAuth(options: AdminAuthOptions): Middleware {
 	return async (ctx, next) => {
 		const url = new URL(ctx.request.url);
-		if (publicPaths.has(url.pathname)) {
+		if (isPublicPath(url.pathname)) {
 			return next();
 		}
 
