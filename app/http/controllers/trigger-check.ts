@@ -4,14 +4,13 @@
  */
 
 import { createAction } from "remix/router";
-import { requireDatabase, TransportKey } from "~/app/http/context";
-import { executeHttpCheck } from "~/app/services/checker";
-import { getMonitorById, recordCheckOutcome } from "~/app/services/monitor-service";
+import { AlertsKey, requireDatabase } from "~/app/http/context";
+import { redirectBack } from "~/app/http/redirect";
+import { checkMonitor, getMonitorById } from "~/app/services/monitor-service";
 import routes from "~/routes/web";
 
 export default createAction(routes.checkMonitor, async (ctx) => {
 	const db = requireDatabase(ctx);
-	const transport = ctx.get(TransportKey);
 	const id = (ctx as any).params?.id;
 
 	if (!id) {
@@ -23,19 +22,7 @@ export default createAction(routes.checkMonitor, async (ctx) => {
 		return new Response("Monitor not found", { status: 404 });
 	}
 
-	const outcome = await executeHttpCheck({
-		url: monitor.url,
-		method: monitor.method,
-		expectedStatus: monitor.expected_status,
-		timeoutSeconds: monitor.timeout_seconds,
-		degradedAfterMs: monitor.degraded_after_ms,
-	});
+	await checkMonitor(db, monitor, ctx.get(AlertsKey));
 
-	await recordCheckOutcome(db, monitor, outcome, transport);
-
-	const referer = ctx.request.headers.get("Referer");
-	const origin = new URL(ctx.request.url).origin;
-	const redirectUrl = referer || `${origin}/monitors/${id}`;
-
-	return Response.redirect(redirectUrl, 303);
+	return redirectBack(ctx.request, routes.monitor.href({ id }));
 });

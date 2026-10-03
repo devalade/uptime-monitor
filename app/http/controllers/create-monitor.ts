@@ -1,40 +1,33 @@
 /**
  * Create Monitor controller for POST /monitors
- * Handles form submissions to add a new monitored URL.
+ * Handles form submissions to add a new monitored URL. Invalid input re-renders the
+ * dashboard with the dialog open, the user's values kept and the errors shown.
  */
 
 import { createAction } from "remix/router";
-import { requireDatabase } from "~/app/http/context";
-import type { HttpMethod } from "~/database/schema";
-import { createMonitor } from "~/app/services/monitor-service";
+import { AlertsKey, requireDatabase } from "~/app/http/context";
+import { createMonitor, getDashboardData } from "~/app/services/monitor-service";
+import { parseMonitorInput, readMonitorForm } from "~/app/services/monitor-input";
+import { renderDashboardView, TIMELINE_LENGTH } from "~/app/http/views/dashboard-view";
 import routes from "~/routes/web";
 
 export default createAction(routes.createMonitor, async (ctx) => {
 	const db = requireDatabase(ctx);
-	const formData = await ctx.request.formData();
+	const values = readMonitorForm(await ctx.request.formData());
+	const input = parseMonitorInput(values);
 
-	const name = formData.get("name")?.toString() || "Unnamed Monitor";
-	const url = formData.get("url")?.toString() || "";
-	const method = (formData.get("method")?.toString() || "HEAD") as HttpMethod;
-	const expectedStatus = parseInt(formData.get("expected_status")?.toString() || "200", 10);
-	const intervalSeconds = parseInt(formData.get("interval_seconds")?.toString() || "60", 10);
-	const timeoutSeconds = parseInt(formData.get("timeout_seconds")?.toString() || "10", 10);
-	const degradedAfterMs = parseInt(formData.get("degraded_after_ms")?.toString() || "3000", 10);
-
-	if (!url) {
-		return new Response("Target URL is required", { status: 400 });
+	if (!input.ok) {
+		const html = renderDashboardView({
+			monitors: await getDashboardData(db, TIMELINE_LENGTH),
+			filter: "all",
+			alertsEnabled: Boolean(ctx.get(AlertsKey)),
+			form: { values, errors: input.errors },
+		});
+		return (ctx as any).render(html, { status: 400 });
 	}
 
-	await createMonitor(db, {
-		name,
-		url,
-		method,
-		expectedStatus,
-		intervalSeconds,
-		timeoutSeconds,
-		degradedAfterMs,
-	});
+	const monitor = await createMonitor(db, input.value);
 
 	const origin = new URL(ctx.request.url).origin;
-	return Response.redirect(`${origin}/`, 303);
+	return Response.redirect(`${origin}${routes.monitor.href({ id: monitor.id })}`, 303);
 });

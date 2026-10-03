@@ -46,18 +46,21 @@ export default tools({
 			}),
 			method: s.defaulted(
 				s.enum_(["HEAD", "GET", "POST", "PUT", "PATCH", "DELETE"]),
-				"HEAD",
+				"GET",
 			).meta({
-				description: "HTTP method to use for the check (default: HEAD).",
+				description: "HTTP method to use for the check (default: GET).",
 			}),
 			expectedStatus: s.defaulted(s.number(), 200).meta({
 				description: "Expected HTTP status code for success (default: 200).",
 			}),
 			intervalSeconds: s.defaulted(s.number(), 60).meta({
-				description: "Check frequency in seconds (default: 60).",
+				description: "Check frequency in seconds, 60 to 86400 (default: 60).",
+			}),
+			isPublic: s.defaulted(s.boolean(), true).meta({
+				description: "Whether the monitor appears on the public status page (default: true).",
 			}),
 			timeoutSeconds: s.defaulted(s.number(), 10).meta({
-				description: "Timeout limit in seconds before marking down (default: 10).",
+				description: "Timeout limit in seconds before marking down, 1 to 30 (default: 10).",
 			}),
 		}),
 	}),

@@ -2,11 +2,10 @@
  * Monitor service managing monitors, check outcomes, uptime metrics, and incident lifecycles.
  */
 
-import { and, eq, lte, gte, or, isNull, notNull } from "remix/data-table";
+import { and, eq, lt, lte, gte, or, isNull, notNull } from "remix/data-table";
 import type { AppDatabase } from "~/app/contracts/database";
-import type { Transport } from "~/app/contracts/transport";
-import type { CheckOutcome } from "~/app/services/checker";
-import { sendIncidentAlert } from "~/app/services/alerting";
+import { executeHttpCheck, type CheckOutcome } from "~/app/services/checker";
+import { sendIncidentAlert, type AlertSettings } from "~/app/services/alerting";
 import {
 	monitors,
 	monitorResults,
@@ -18,6 +17,17 @@ import {
 } from "~/database/schema";
 import { logger } from "~/bootstrap/logger";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Cron ticks land a few seconds apart; without slack a 60s monitor would only run every other tick. */
+const SCHEDULE_GRACE_MS = 15_000;
+
+/** Raw check rows older than this are pruned by the sweep. */
+const RESULT_RETENTION_MS = 30 * DAY_MS;
+
+/** Wait before re-checking a failure, so a one-off network blip does not page anyone. */
+const CONFIRM_FAILURE_DELAY_MS = 2000;
+
 export interface CreateMonitorInput {
 	name: string;
 	url: string;
@@ -26,14 +36,30 @@ export interface CreateMonitorInput {
 	intervalSeconds?: number;
 	timeoutSeconds?: number;
 	degradedAfterMs?: number;
+	isPublic?: boolean;
+}
+
+export type CheckSegmentStatus = "up" | "down" | "degraded";
+
+export interface CheckSegment {
+	status: CheckSegmentStatus;
+	checkedAt: number;
+	responseTimeMs: number | null;
+	statusCode: number | null;
 }
 
 export interface MonitorDetailData {
 	monitor: SelectMonitor;
 	results: SelectMonitorResult[];
 	incidents: SelectIncident[];
-	uptimePercentage24h: number;
+	uptimePercentage24h: number | null;
 	averageLatencyMs: number;
+}
+
+export interface DashboardMonitor {
+	monitor: SelectMonitor;
+	uptimePercentage24h: number | null;
+	recentChecks: CheckSegment[];
 }
 
 /**
@@ -47,15 +73,25 @@ export async function listMonitors(db: AppDatabase): Promise<SelectMonitor[]> {
 }
 
 /**
+ * Lists monitors with their 24h uptime and latest checks for the dashboard timeline.
+ */
+export async function getDashboardData(db: AppDatabase, timelineLength: number): Promise<DashboardMonitor[]> {
+	const all = await listMonitors(db);
+	return Promise.all(
+		all.map(async (monitor) => ({
+			monitor,
+			uptimePercentage24h: await calculate24hUptime(db, monitor.id),
+			recentChecks: await listRecentChecks(db, monitor.id, timelineLength),
+		})),
+	);
+}
+
+/**
  * Gets a single monitor by its primary key.
  */
 export async function getMonitorById(db: AppDatabase, id: string): Promise<SelectMonitor | null> {
-	try {
-		const row = await db.find(monitors, id);
-		return (row as SelectMonitor) ?? null;
-	} catch {
-		return null;
-	}
+	const row = await db.find(monitors, id);
+	return (row as SelectMonitor | null) ?? null;
 }
 
 /**
@@ -77,18 +113,6 @@ export async function getMonitorWithHistory(db: AppDatabase, id: string): Promis
 		limit: 20,
 	})) as SelectIncident[];
 
-	// Calculate 24h uptime percentage
-	const now = Date.now();
-	const oneDayAgo = now - 24 * 60 * 60 * 1000;
-	const recentResults = results.filter((r) => r.created_at >= oneDayAgo);
-
-	let uptimePercentage24h = 100;
-	if (recentResults.length > 0) {
-		const upCount = recentResults.filter((r) => r.is_up).length;
-		uptimePercentage24h = Math.round((upCount / recentResults.length) * 10000) / 100;
-	}
-
-	// Calculate average latency
 	const validLatencies = results
 		.map((r) => r.response_time_ms)
 		.filter((ms): ms is number => typeof ms === "number" && ms >= 0);
@@ -102,7 +126,7 @@ export async function getMonitorWithHistory(db: AppDatabase, id: string): Promis
 		monitor,
 		results,
 		incidents: monitorIncidents,
-		uptimePercentage24h,
+		uptimePercentage24h: await calculate24hUptime(db, id),
 		averageLatencyMs,
 	};
 }
@@ -120,12 +144,13 @@ export async function createMonitor(db: AppDatabase, input: CreateMonitorInput):
 			id,
 			name: input.name.trim(),
 			url: input.url.trim(),
-			method: input.method ?? "HEAD",
+			method: input.method ?? "GET",
 			expected_status: input.expectedStatus ?? 200,
 			interval_seconds: input.intervalSeconds ?? 60,
 			timeout_seconds: input.timeoutSeconds ?? 10,
 			degraded_after_ms: input.degradedAfterMs ?? 3000,
 			is_enabled: true,
+			is_public: input.isPublic ?? true,
 			last_status: null,
 			last_checked_at: null,
 			last_response_time_ms: null,
@@ -147,13 +172,13 @@ export async function deleteMonitor(db: AppDatabase, id: string): Promise<void> 
 }
 
 /**
- * Toggles a monitor's enabled/disabled state.
+ * Toggles a monitor's enabled/disabled state. Returns null when the monitor does not exist.
  */
-export async function toggleMonitor(db: AppDatabase, id: string): Promise<SelectMonitor> {
-	const monitor = await db.find(monitors, id);
-	if (!monitor) throw new Error(`Monitor ${id} not found`);
+export async function toggleMonitor(db: AppDatabase, id: string): Promise<SelectMonitor | null> {
+	const monitor = await getMonitorById(db, id);
+	if (!monitor) return null;
 
-	const isEnabled = !(monitor as SelectMonitor).is_enabled;
+	const isEnabled = !monitor.is_enabled;
 	const now = Date.now();
 
 	const updated = (await db.update(
@@ -170,6 +195,19 @@ export async function toggleMonitor(db: AppDatabase, id: string): Promise<Select
 }
 
 /**
+ * Shows or hides a monitor on the public status page. Returns null when the monitor does not exist.
+ */
+export async function toggleMonitorVisibility(db: AppDatabase, id: string): Promise<SelectMonitor | null> {
+	const monitor = await getMonitorById(db, id);
+	if (!monitor) return null;
+
+	return (await db.update(monitors, id, {
+		is_public: !monitor.is_public,
+		updated_at: Date.now(),
+	})) as SelectMonitor;
+}
+
+/**
  * Finds all active monitors that are due for a health check.
  */
 export async function findDueMonitors(db: AppDatabase, now: number = Date.now()): Promise<SelectMonitor[]> {
@@ -178,13 +216,81 @@ export async function findDueMonitors(db: AppDatabase, now: number = Date.now())
 			eq(monitors.is_enabled, true),
 			or(
 				isNull(monitors.next_due_at),
-				lte(monitors.next_due_at, now),
+				lte(monitors.next_due_at, now + SCHEDULE_GRACE_MS),
 			),
 		),
+		orderBy: [["next_due_at", "asc"]],
 		limit: 100,
 	})) as SelectMonitor[];
 
 	return due;
+}
+
+/**
+ * Probes a monitor and records the outcome. Every check path (cron, button, MCP) goes through here
+ * so incidents and alerts behave the same regardless of who triggered the check.
+ */
+export async function checkMonitor(
+	db: AppDatabase,
+	monitor: SelectMonitor,
+	alerts?: AlertSettings,
+	options: { confirmFailureDelayMs?: number } = {},
+): Promise<{ monitor: SelectMonitor; outcome: CheckOutcome; incident?: SelectIncident }> {
+	const probe = () =>
+		executeHttpCheck({
+			url: monitor.url,
+			method: monitor.method,
+			expectedStatus: monitor.expected_status,
+			timeoutSeconds: monitor.timeout_seconds,
+			degradedAfterMs: monitor.degraded_after_ms,
+		});
+
+	let outcome = await probe();
+
+	// Confirm a new failure before it opens an incident. During an outage that is
+	// already confirmed, every check counts as-is.
+	if (outcome.status === "down" && monitor.last_status !== "down") {
+		await new Promise((resolve) => setTimeout(resolve, options.confirmFailureDelayMs ?? CONFIRM_FAILURE_DELAY_MS));
+		outcome = await probe();
+	}
+
+	const recorded = await recordCheckOutcome(db, monitor, outcome, alerts);
+	return { ...recorded, outcome };
+}
+
+/**
+ * Checks every due monitor and prunes old check rows once an hour.
+ */
+export async function runSweep(
+	db: AppDatabase,
+	alerts?: AlertSettings,
+	now: number = Date.now(),
+): Promise<{ swept: number; failed: number }> {
+	const due = await findDueMonitors(db, now);
+	const log = logger.open("cron", { count: due.length });
+	log.note(`Sweeping ${due.length} due monitors`);
+	log.emit();
+
+	const results = await Promise.allSettled(due.map((monitor) => checkMonitor(db, monitor, alerts)));
+
+	results.forEach((result, index) => {
+		if (result.status === "fulfilled") return;
+		const errLog = logger.open("job", {
+			monitorId: due[index].id,
+			error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+		});
+		errLog.note(`Failed to check monitor ${due[index].name}`);
+		errLog.emit();
+	});
+
+	if (new Date(now).getUTCMinutes() === 0) {
+		await db.deleteMany(monitorResults, { where: lt(monitorResults.created_at, now - RESULT_RETENTION_MS) });
+	}
+
+	return {
+		swept: due.length,
+		failed: results.filter((r) => r.status === "rejected").length,
+	};
 }
 
 /**
@@ -195,9 +301,7 @@ export async function recordCheckOutcome(
 	db: AppDatabase,
 	monitor: SelectMonitor,
 	outcome: CheckOutcome,
-	transport?: Transport,
-	fromEmail: string = "alerts@uptime.local",
-	alertEmail?: string,
+	alerts?: AlertSettings,
 ): Promise<{ monitor: SelectMonitor; incident?: SelectIncident }> {
 	const now = Date.now();
 	const previousStatus = monitor.last_status;
@@ -220,11 +324,10 @@ export async function recordCheckOutcome(
 
 	// Transition: UP/DEGRADED/NULL -> DOWN (Incident starts)
 	if (previousStatus !== "down" && currentStatus === "down") {
-		const incidentId = crypto.randomUUID();
 		createdIncident = (await db.create(
 			incidents,
 			{
-				id: incidentId,
+				id: crypto.randomUUID(),
 				monitor_id: monitor.id,
 				started_at: now,
 				resolved_at: null,
@@ -235,9 +338,8 @@ export async function recordCheckOutcome(
 			{ returnRow: true },
 		)) as SelectIncident;
 
-		// Dispatch alert
-		if (transport && alertEmail) {
-			await sendIncidentAlert(transport, alertEmail, fromEmail, {
+		if (alerts) {
+			await sendIncidentAlert(alerts, {
 				monitor,
 				previousStatus,
 				currentStatus,
@@ -247,26 +349,17 @@ export async function recordCheckOutcome(
 		}
 	}
 
-	// Transition: DOWN -> UP (Incident resolved)
-	if (previousStatus === "down" && currentStatus === "up") {
-		// Find open incidents for this monitor and mark resolved
-		const openIncidents = (await db.findMany(incidents, {
-			where: and(
-				eq(incidents.monitor_id, monitor.id),
-				isNull(incidents.resolved_at),
-			),
-			limit: 10,
-		})) as SelectIncident[];
+	// Any reachable response (up or slow) ends the outage. Resolving by query rather than by
+	// previous status also closes incidents left open by earlier versions.
+	if (currentStatus !== "down") {
+		const resolved = await db.updateMany(
+			incidents,
+			{ resolved_at: now },
+			{ where: and(eq(incidents.monitor_id, monitor.id), isNull(incidents.resolved_at)) },
+		);
 
-		for (const openIncident of openIncidents) {
-			await db.update(incidents, openIncident.id, {
-				resolved_at: now,
-			});
-		}
-
-		// Dispatch recovery alert
-		if (transport && alertEmail) {
-			await sendIncidentAlert(transport, alertEmail, fromEmail, {
+		if (resolved.affectedRows > 0 && alerts) {
+			await sendIncidentAlert(alerts, {
 				monitor,
 				previousStatus,
 				currentStatus,
@@ -305,119 +398,138 @@ export async function recordCheckOutcome(
 export interface PublicServiceStatus {
 	id: string;
 	name: string;
-	status: "up" | "down" | "degraded" | "paused" | "pending";
-	uptimePercentage24h: number;
+	status: "up" | "down" | "degraded" | "pending";
+	uptimePercentage24h: number | null;
 	lastResponseTimeMs: number | null;
-	historySegments: Array<"up" | "down" | "degraded" | "pending">;
+	recentChecks: CheckSegment[];
+}
+
+/** Incidents as the public sees them: which service and when, never the raw failure details. */
+export interface PublicIncident {
+	id: string;
+	monitorName: string;
+	startedAt: number;
+	resolvedAt: number | null;
 }
 
 export interface PublicStatusData {
 	systemStatus: "operational" | "degraded" | "outage";
 	systemStatusTitle: string;
 	systemStatusDescription: string;
-	overallUptime24h: number;
+	overallUptime24h: number | null;
 	totalMonitors: number;
 	services: PublicServiceStatus[];
-	activeIncidents: SelectIncident[];
-	pastIncidents: SelectIncident[];
-	generatedAt: string;
+	activeIncidents: PublicIncident[];
+	pastIncidents: PublicIncident[];
+	generatedAt: number;
 }
 
-export async function calculate24hUptime(db: AppDatabase, monitorId: string): Promise<number> {
-	const now = Date.now();
-	const oneDayAgo = now - 24 * 60 * 60 * 1000;
-	const results = (await db.findMany(monitorResults, {
-		where: and(
-			eq(monitorResults.monitor_id, monitorId),
-			gte(monitorResults.created_at, oneDayAgo),
-		),
-		limit: 200,
+/**
+ * Share of successful checks in the last 24h, or null when there were no checks.
+ * Degraded (slow but reachable) checks count as up.
+ */
+export async function calculate24hUptime(db: AppDatabase, monitorId: string): Promise<number | null> {
+	const since = Date.now() - DAY_MS;
+	const inWindow = and(eq(monitorResults.monitor_id, monitorId), gte(monitorResults.created_at, since));
+
+	const total = await db.count(monitorResults, { where: inWindow });
+	if (total === 0) return null;
+
+	const upCount = await db.count(monitorResults, { where: and(inWindow, eq(monitorResults.is_up, true)) });
+	return Math.round((upCount / total) * 10000) / 100;
+}
+
+/**
+ * Latest checks for a monitor, oldest first, for timeline bars.
+ */
+export async function listRecentChecks(db: AppDatabase, monitorId: string, limit: number): Promise<CheckSegment[]> {
+	const rows = (await db.findMany(monitorResults, {
+		where: eq(monitorResults.monitor_id, monitorId),
+		orderBy: [["created_at", "desc"]],
+		limit,
 	})) as SelectMonitorResult[];
 
-	if (results.length === 0) return 100;
-	const upCount = results.filter((r) => r.is_up).length;
-	return Math.round((upCount / results.length) * 10000) / 100;
+	return rows.reverse().map((r) => ({
+		// Slow checks are stored as up with an explanatory message.
+		status: !r.is_up ? "down" : r.error_message ? "degraded" : "up",
+		checkedAt: r.created_at,
+		responseTimeMs: r.response_time_ms,
+		statusCode: r.response_status,
+	}));
 }
 
 /**
  * Compiles aggregated public status page data including service health, uptime bars, and incidents.
  */
-export async function getPublicStatusPageData(db: AppDatabase): Promise<PublicStatusData> {
+export async function getPublicStatusPageData(db: AppDatabase, timelineLength: number): Promise<PublicStatusData> {
 	const activeMonitors = (await db.findMany(monitors, {
-		where: eq(monitors.is_enabled, true),
+		where: and(eq(monitors.is_enabled, true), eq(monitors.is_public, true)),
 		orderBy: [["name", "asc"]],
 	})) as SelectMonitor[];
 
-	let totalUptimeSum = 0;
-	const services: PublicServiceStatus[] = [];
-
-	for (const mon of activeMonitors) {
-		const uptime = await calculate24hUptime(db, mon.id);
-		totalUptimeSum += uptime;
-
-		// Fetch last 30 results for segmented uptime timeline
-		const recentResults = (await db.findMany(monitorResults, {
-			where: eq(monitorResults.monitor_id, mon.id),
-			orderBy: [["created_at", "desc"]],
-			limit: 30,
-		})) as SelectMonitorResult[];
-
-		const historySegments = recentResults
-			.reverse()
-			.map((r) => (r.is_up ? "up" : "down"));
-
-		services.push({
+	const services: PublicServiceStatus[] = await Promise.all(
+		activeMonitors.map(async (mon) => ({
 			id: mon.id,
 			name: mon.name,
-			status: (mon.last_status as any) || "pending",
-			uptimePercentage24h: uptime,
+			status: mon.last_status ?? "pending",
+			uptimePercentage24h: await calculate24hUptime(db, mon.id),
 			lastResponseTimeMs: mon.last_response_time_ms,
-			historySegments,
-		});
-	}
+			recentChecks: await listRecentChecks(db, mon.id, timelineLength),
+		})),
+	);
 
-	const activeIncidents = (await db.findMany(incidents, {
-		where: isNull(incidents.resolved_at),
-		orderBy: [["started_at", "desc"]],
-		limit: 10,
-	})) as SelectIncident[];
+	const monitorNames = new Map(activeMonitors.map((m) => [m.id, m.name]));
+	const withMonitorName = (rows: SelectIncident[]): PublicIncident[] =>
+		rows
+			.filter((inc) => monitorNames.has(inc.monitor_id))
+			.map((inc) => ({
+				id: inc.id,
+				monitorName: monitorNames.get(inc.monitor_id)!,
+				startedAt: inc.started_at,
+				resolvedAt: inc.resolved_at,
+			}));
 
-	const pastIncidents = (await db.findMany(incidents, {
-		where: notNull(incidents.resolved_at),
-		orderBy: [["started_at", "desc"]],
-		limit: 10,
-	})) as SelectIncident[];
+	const activeIncidents = withMonitorName(
+		(await db.findMany(incidents, {
+			where: isNull(incidents.resolved_at),
+			orderBy: [["started_at", "desc"]],
+			limit: 10,
+		})) as SelectIncident[],
+	);
 
-	const hasDown = services.some((s) => s.status === "down") || activeIncidents.length > 0;
+	const pastIncidents = withMonitorName(
+		(await db.findMany(incidents, {
+			where: and(notNull(incidents.resolved_at), gte(incidents.started_at, Date.now() - 7 * DAY_MS)),
+			orderBy: [["started_at", "desc"]],
+			limit: 10,
+		})) as SelectIncident[],
+	);
+
+	const downCount = services.filter((s) => s.status === "down").length;
 	const hasDegraded = services.some((s) => s.status === "degraded");
 
 	let systemStatus: "operational" | "degraded" | "outage" = "operational";
 	let systemStatusTitle = "All Systems Operational";
-	let systemStatusDescription =
-		"All systems and endpoints are reporting healthy performance and nominal latencies.";
+	let systemStatusDescription = "All monitored services are responding normally.";
 
-	if (hasDown) {
-		const downCount = services.filter((s) => s.status === "down").length;
-		if (downCount > 1 || (services.length > 0 && downCount === services.length)) {
-			systemStatus = "outage";
+	if (downCount > 0) {
+		systemStatus = "outage";
+		if (downCount > 1 || downCount === services.length) {
 			systemStatusTitle = "Major System Outage";
-			systemStatusDescription =
-				"Multiple services are currently unavailable. Our team is actively investigating.";
+			systemStatusDescription = "Multiple services are currently unavailable.";
 		} else {
-			systemStatus = "outage";
 			systemStatusTitle = "Partial System Outage";
-			systemStatusDescription =
-				"One or more services are experiencing disruptions. Core systems remain functional.";
+			systemStatusDescription = "One service is currently unavailable. Other services are unaffected.";
 		}
 	} else if (hasDegraded) {
 		systemStatus = "degraded";
 		systemStatusTitle = "Degraded Performance";
-		systemStatusDescription =
-			"Systems are currently experiencing higher than normal response times.";
+		systemStatusDescription = "Some services are responding slower than usual.";
 	}
 
+	const measured = services.map((s) => s.uptimePercentage24h).filter((u): u is number => u !== null);
 	const overallUptime24h =
-		services.length > 0 ? Math.round((totalUptimeSum / services.length) * 10) / 10 : 100;
+		measured.length > 0 ? Math.round((measured.reduce((a, b) => a + b, 0) / measured.length) * 100) / 100 : null;
 
 	return {
 		systemStatus,
@@ -428,7 +540,6 @@ export async function getPublicStatusPageData(db: AppDatabase): Promise<PublicSt
 		services,
 		activeIncidents,
 		pastIncidents,
-		generatedAt: new Date().toUTCString(),
+		generatedAt: Date.now(),
 	};
 }
-

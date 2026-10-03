@@ -5,18 +5,18 @@
 
 import { createHandler, createTool } from "@sdxc/mcp";
 import type { AppDatabase } from "~/app/contracts/database";
-import type { Transport } from "~/app/contracts/transport";
-import { executeHttpCheck } from "~/app/services/checker";
 import {
+	checkMonitor,
 	createMonitor,
 	getMonitorById,
 	getMonitorWithHistory,
 	listMonitors,
-	recordCheckOutcome,
 } from "~/app/services/monitor-service";
+import type { AlertSettings } from "~/app/services/alerting";
+import { parseMonitorInput } from "~/app/services/monitor-input";
 import toolset from "~/app/mcp/tools";
 
-export function createUptimeMcpHandler(db: AppDatabase, transport?: Transport) {
+export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings) {
 	const mcp = createHandler({
 		name: "uptime-monitor-mcp",
 		version: "1.0.0",
@@ -39,6 +39,7 @@ export function createUptimeMcpHandler(db: AppDatabase, transport?: Transport) {
 					lastCheckedAt: m.last_checked_at ? new Date(m.last_checked_at).toISOString() : null,
 					lastResponseTimeMs: m.last_response_time_ms,
 					isEnabled: m.is_enabled,
+					isPublic: m.is_public,
 				})),
 			};
 		}),
@@ -60,7 +61,7 @@ export function createUptimeMcpHandler(db: AppDatabase, transport?: Transport) {
 					method: detail.monitor.method,
 					expectedStatus: detail.monitor.expected_status,
 					status: detail.monitor.last_status ?? "pending",
-					uptimePercentage24h: `${detail.uptimePercentage24h}%`,
+					uptimePercentage24h: detail.uptimePercentage24h === null ? null : `${detail.uptimePercentage24h}%`,
 					averageLatencyMs: detail.averageLatencyMs,
 					isEnabled: detail.monitor.is_enabled,
 				},
@@ -92,20 +93,7 @@ export function createUptimeMcpHandler(db: AppDatabase, transport?: Transport) {
 				return { error: `Monitor ${ctx.input.id} not found` };
 			}
 
-			const outcome = await executeHttpCheck({
-				url: monitor.url,
-				method: monitor.method,
-				expectedStatus: monitor.expected_status,
-				timeoutSeconds: monitor.timeout_seconds,
-				degradedAfterMs: monitor.degraded_after_ms,
-			});
-
-			const { monitor: updated, incident } = await recordCheckOutcome(
-				db,
-				monitor,
-				outcome,
-				transport,
-			);
+			const { monitor: updated, outcome, incident } = await checkMonitor(db, monitor, alerts);
 
 			return {
 				monitorId: updated.id,
@@ -123,14 +111,20 @@ export function createUptimeMcpHandler(db: AppDatabase, transport?: Transport) {
 	mcp.tools.map(
 		toolset.createMonitor,
 		createTool(toolset.createMonitor, async (ctx) => {
-			const monitor = await createMonitor(db, {
+			const input = parseMonitorInput({
 				name: ctx.input.name,
 				url: ctx.input.url,
-				method: ctx.input.method as any,
-				expectedStatus: ctx.input.expectedStatus,
-				intervalSeconds: ctx.input.intervalSeconds,
-				timeoutSeconds: ctx.input.timeoutSeconds,
+				method: ctx.input.method,
+				expected_status: String(ctx.input.expectedStatus),
+				interval_seconds: String(ctx.input.intervalSeconds),
+				timeout_seconds: String(ctx.input.timeoutSeconds),
+				is_public: String(ctx.input.isPublic),
 			});
+			if (!input.ok) {
+				return { success: false, errors: input.errors };
+			}
+
+			const monitor = await createMonitor(db, input.value);
 
 			return {
 				success: true,

@@ -29,6 +29,8 @@ export const monitors = table({
 		timeout_seconds: c.integer().default(10),
 		degraded_after_ms: c.integer().default(3000),
 		is_enabled: c.boolean().default(true),
+		/** Shown on the public status page. */
+		is_public: c.boolean().default(true),
 		last_status: c.enum(monitorStatuses).nullable(),
 		last_checked_at: c.integer().nullable(),
 		last_response_time_ms: c.integer().nullable(),

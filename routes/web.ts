@@ -13,4 +13,6 @@ export default route({
 	checkMonitor: post("/monitors/:id/check"),
 	toggleMonitor: post("/monitors/:id/toggle"),
 	deleteMonitor: post("/monitors/:id/delete"),
+	toggleVisibility: post("/monitors/:id/visibility"),
+	testAlert: post("/alerts/test"),
 });

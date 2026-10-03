@@ -32,6 +32,50 @@ An edge-native uptime monitoring service built with **Remix 3** and Sergio Xalam
 
 ---
 
+## 👤 Using It
+
+| Page | Who | What it's for |
+| --- | --- | --- |
+| `/` | Admin (password) | Add, check, pause and delete monitors |
+| `/monitors/:id` | Admin (password) | Uptime, response times, check log and incidents for one monitor |
+| `/status` | Anyone | Public status page to share with your users |
+
+**How a check works**
+1. A Cron Trigger fires every minute and checks every enabled monitor that is due.
+2. A check passes when the response status equals the expected status. If it passes but takes
+   longer than the "slow after" threshold, the monitor is marked **degraded**.
+3. A failed check is re-checked 2 seconds later. Only if that also fails does the monitor go
+   down, open an incident and send a DOWN alert, so one-off network blips don't page anyone.
+   The next passing check (up or degraded) resolves the incident and sends a RECOVERED alert.
+4. Check results are kept for 30 days.
+
+**Access** (Cloudflare Access)
+- The dashboard, monitor pages, `/api/mcp` and `/api/cron/sweep` sit behind a Cloudflare Access
+  application. People sign in through Access; MCP clients and schedulers use an Access service token.
+- The Worker also verifies the `Cf-Access-Jwt-Assertion` token itself (signature, issuer and AUD),
+  so a request that skips Access, e.g. via the `workers.dev` URL, gets a 403.
+- Without `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`, the admin pages work on `localhost` only and
+  return 503 everywhere else.
+- `/status` and `/api/health` are always public.
+
+**Public status page**
+Every monitor has a "Show on the public status page" setting (on by default). Hidden monitors
+are marked *Private* on the dashboard. The public page never shows raw error messages, only
+which service is affected and since when.
+
+**Alerts**
+Alerts go to every channel you configure; the dashboard shows a banner while none is set up.
+- **Webhook** (easiest): `npx wrangler secret put ALERT_WEBHOOK_URL` with an https URL.
+  Discord webhooks, Slack incoming webhooks and `https://ntfy.sh/<topic>` get their native
+  format; any other URL receives JSON (`event`, `monitor`, `status`, `reason`, `timestamp`, `text`).
+- **Email**: set `ALERT_EMAIL` and add a `send_email` binding named `EMAIL` (see `wrangler.jsonc` /
+  `cloudflare.config.ts`). The recipient must be a verified Email Routing destination and
+  `MAIL_FROM` must be on a domain you have in Cloudflare.
+
+Use **Send test alert** on the dashboard to confirm delivery; it reports any channel that failed.
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -73,7 +117,7 @@ uptime-monitor/
    ```bash
    npm run db:local:migrate
    # Or using cf CLI directly:
-   # npx cf d1 migrations apply uptime-db --local
+   # npx wrangler d1 migrations apply uptime-db --local
    ```
 
 3. **Start local dev server**:
@@ -85,6 +129,11 @@ uptime-monitor/
 4. **Typecheck codebase**:
    ```bash
    npm run typecheck
+   ```
+
+5. **Run the tests** (Node's test runner against in-memory SQLite, no network):
+   ```bash
+   npm test
    ```
 
 ---
@@ -141,13 +190,31 @@ export default defineConfig({
 });
 ```
 
-### 3. Apply Remote Migrations
+### 3. Protect the Admin Pages with Cloudflare Access
+In the Zero Trust dashboard (**Access → Applications**):
+
+1. **Admin application**: add a *Self-hosted* application for the Worker's hostname
+   (custom domain or `uptime-monitor.<subdomain>.workers.dev`) with:
+   - an **Allow** policy including your email address (people who can use the dashboard);
+   - a **Service Auth** policy including a service token (**Access → Service credentials**)
+     for MCP clients and external schedulers.
+2. **Public application**: add a second *Self-hosted* application on the same hostname with the
+   paths `status` and `api/health`, and a **Bypass** policy including *Everyone*. The more specific
+   paths take precedence, so the status page stays public.
+3. Put the admin application's **Application Audience (AUD) Tag** and your **team domain**
+   (e.g. `myteam.cloudflareaccess.com`) in the `deploy` script in `package.json`, which passes them
+   as `ACCESS_AUD` and `ACCESS_TEAM_DOMAIN`. They are only set on deploy, so local dev stays open.
+
+Current setup: team `devalade.cloudflareaccess.com`, applications
+"uptime-monitor - Cloudflare Workers" (admin + service token) and "uptime-monitor - Public status" (bypass).
+
+### 4. Apply Remote Migrations
 ```bash
 npm run db:remote:migrate
-# Or: npx cf d1 migrations apply uptime-db
+# Or: npx wrangler d1 migrations apply uptime-db --remote
 ```
 
-### 4. Deploy the Worker
+### 5. Deploy the Worker
 ```bash
 npm run deploy
 # Or: npx cf deploy
@@ -164,6 +231,7 @@ npm run deploy
 To connect AI assistants (Claude Desktop, Cursor, Antigravity, etc.) to this uptime monitor:
 - **Endpoint**: `https://<your-worker-subdomain>.workers.dev/api/mcp`
 - **Method**: `POST`
+- **Auth**: Access service token headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`
 - **Protocol Version**: `2026-07-28`
 - **Available Tools**:
   - `list_monitors`: Lists all monitored endpoints and status.

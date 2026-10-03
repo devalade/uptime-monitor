@@ -25,6 +25,19 @@ export default defineConfig({
 			SESSION_SECRET: bindings.text(
 				process.env.SESSION_SECRET || "uptime-monitor-session-secret-at-least-32-chars-long",
 			),
+			// Cloudflare Access application protecting the dashboard, MCP and sweep endpoints.
+			// Without both, the deployed admin pages are locked (503).
+			...(process.env.ACCESS_TEAM_DOMAIN && process.env.ACCESS_AUD
+				? {
+						ACCESS_TEAM_DOMAIN: bindings.text(process.env.ACCESS_TEAM_DOMAIN),
+						ACCESS_AUD: bindings.text(process.env.ACCESS_AUD),
+					}
+				: {}),
+			// Alerts are sent only when a recipient is configured. The address must be a verified
+			// destination in Cloudflare Email Routing.
+			...(process.env.ALERT_EMAIL
+				? { ALERT_EMAIL: bindings.text(process.env.ALERT_EMAIL), EMAIL: bindings.sendEmail() }
+				: {}),
 		},
 
 		triggers: [

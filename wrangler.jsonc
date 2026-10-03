@@ -26,7 +26,14 @@
 		"APP_URL": "http://localhost:8787",
 		"MAIL_FROM": "alerts@uptime.local",
 		"SESSION_SECRET": "uptime-monitor-session-secret-at-least-32-chars-long"
+		// "ALERT_EMAIL": "you@example.com"  (must be a verified Email Routing destination)
+		// Cloudflare Access protecting the admin pages (Zero Trust → Access → Applications):
+		// "ACCESS_TEAM_DOMAIN": "myteam.cloudflareaccess.com",
+		// "ACCESS_AUD": "<application audience tag>"
 	},
+	// Uncomment together with ALERT_EMAIL to receive down/recovery emails.
+	// "send_email": [{ "name": "EMAIL" }],
+
 	"observability": {
 		"enabled": true
 	}

@@ -4,13 +4,21 @@
  * Pure edge-rendered HTML/CSS, zero client hydration bundle, crisp typography, and responsive grid.
  */
 
+import { renderAddMonitorDialog, type AddMonitorFormState } from "~/app/http/views/add-monitor-dialog";
+import { escapeHtml } from "~/app/http/views/html";
+import routes from "~/routes/web";
+
 export interface LayoutProps {
 	title: string;
 	children: string;
 	currentPath?: string;
+	/** Public pages get no admin navigation or controls. */
+	variant?: "admin" | "public";
+	addMonitorForm?: AddMonitorFormState;
 }
 
 export function renderLayout(props: LayoutProps): string {
+	const isAdmin = (props.variant ?? "admin") === "admin";
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -402,6 +410,41 @@ export function renderLayout(props: LayoutProps): string {
 			font-family: var(--font-mono);
 			z-index: 100000;
 			box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+			white-space: pre-line;
+		}
+
+		/* Check timelines */
+		.timeline { display: flex; gap: 2px; align-items: center; }
+		.tick { flex: 1; border-radius: 1px; transition: transform 60ms ease; }
+		.tick:hover { transform: scaleY(1.35); }
+		.tick.up { background: var(--up); }
+		.tick.down { background: var(--down); }
+		.tick.degraded { background: var(--degraded); }
+		.tick.empty { background: var(--border-subtle); }
+
+		/* Feedback */
+		.alert {
+			border-radius: 6px;
+			padding: 0.625rem 0.875rem;
+			font-size: 0.8125rem;
+			margin-bottom: 1rem;
+			border: 1px solid var(--border-medium);
+			background: var(--bg-surface);
+		}
+		.alert-error { border-color: var(--down-border); background: var(--down-bg); color: #ff7b72; }
+		.alert-warning { border-color: var(--degraded-border); background: var(--degraded-bg); color: #e3b341; }
+		.alert code { font-family: var(--font-mono); font-size: 0.75rem; }
+		.form-error { color: #ff7b72; font-size: 0.75rem; margin-top: 0.375rem; }
+		.form-control[aria-invalid="true"] { border-color: var(--down); }
+		.label-hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-dim); }
+		.checkbox { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 1rem; cursor: pointer; }
+		.advanced summary { cursor: pointer; font-size: 0.75rem; color: var(--text-muted); }
+
+		@media (max-width: 720px) {
+			.header-container { padding: 0.625rem 1rem; }
+			.brand-badge { display: none; }
+			main { padding: 1rem 1rem 3rem; }
+			.form-row { grid-template-columns: 1fr; }
 		}
 	</style>
 </head>
@@ -409,26 +452,26 @@ export function renderLayout(props: LayoutProps): string {
 	<header>
 		<div class="header-container">
 			<div style="display: flex; align-items: center; gap: 1.25rem;">
-				<a href="/" class="brand">
+				<a href="${isAdmin ? routes.home.href() : routes.status.href()}" class="brand">
 					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--up)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
 					<span>Uptime Monitor</span>
 				</a>
-				<div class="brand-badge">
-					<span style="color: var(--border-strong);">/</span>
-					<span>Cloudflare Global Edge</span>
-				</div>
 			</div>
 
-			<div style="display: flex; align-items: center; gap: 1rem;">
+			${
+				isAdmin
+					? `<div style="display: flex; align-items: center; gap: 1rem;">
 				<nav class="nav-menu">
-					<a href="/" class="nav-item ${props.currentPath === "/" ? "active" : ""}">Dashboard</a>
-					<a href="/status" class="nav-item ${props.currentPath === "/status" ? "active" : ""}">Public Status</a>
+					<a href="${routes.home.href()}" class="nav-item ${props.currentPath === routes.home.href() ? "active" : ""}">Dashboard</a>
+					<a href="${routes.status.href()}" class="nav-item" target="_blank" rel="noopener">Public status page ↗</a>
 				</nav>
 
 				<button type="button" class="btn btn-primary" data-dialog-open="add-monitor-modal">
-					+ New Monitor
+					+ New monitor
 				</button>
-			</div>
+			</div>`
+					: ""
+			}
 		</div>
 	</header>
 
@@ -437,8 +480,10 @@ export function renderLayout(props: LayoutProps): string {
 	</main>
 
 	<footer>
-		Cloudflare D1 & KV Uptime Engine · Monitored every 60s from 310+ Anycast PoPs
+		Checks run every minute on Cloudflare Workers
 	</footer>
+
+	${isAdmin ? renderAddMonitorDialog(props.addMonitorForm) : ""}
 
 	<!-- Tooltip for segmented timelines -->
 	<div id="proto-tooltip"></div>
@@ -447,43 +492,54 @@ export function renderLayout(props: LayoutProps): string {
 		// Modal handling
 		document.querySelectorAll("[data-dialog-open]").forEach((btn) => {
 			btn.addEventListener("click", () => {
-				const id = btn.getAttribute("data-dialog-open");
-				const dialog = document.getElementById(id);
+				const dialog = document.getElementById(btn.getAttribute("data-dialog-open"));
 				if (dialog) dialog.showModal();
 			});
 		});
 
 		document.querySelectorAll("[data-dialog-close]").forEach((btn) => {
-			btn.addEventListener("click", () => {
-				const dialog = btn.closest("dialog");
-				if (dialog) dialog.close();
-			});
+			btn.addEventListener("click", () => btn.closest("dialog")?.close());
 		});
 
-		// Timeline Hover Popover
-		window.showTickTooltip = function(e, text) {
-			const tip = document.getElementById("proto-tooltip");
-			if (!tip) return;
-			tip.innerHTML = text;
-			tip.style.display = "block";
-			tip.style.left = (e.clientX - 50) + "px";
-			tip.style.top = (e.clientY - 44) + "px";
-		};
+		document.querySelectorAll("dialog[data-open-on-load]").forEach((dialog) => dialog.showModal());
 
-		window.hideTickTooltip = function() {
-			const tip = document.getElementById("proto-tooltip");
-			if (tip) tip.style.display = "none";
-		};
+		// Destructive forms ask first; the message is read from an attribute, never built as code
+		document.addEventListener("submit", (e) => {
+			const message = e.target.getAttribute && e.target.getAttribute("data-confirm");
+			if (message && !confirm(message)) e.preventDefault();
+		});
+
+		// Show buttons as busy while a check or save is in flight
+		document.addEventListener("submit", (e) => {
+			if (e.defaultPrevented) return;
+			const button = e.target.querySelector("button[type=submit]");
+			if (button && button.dataset.busy) {
+				button.disabled = true;
+				button.textContent = button.dataset.busy;
+			}
+		});
+
+		// Local times
+		document.querySelectorAll("time[data-local]").forEach((el) => {
+			const date = new Date(el.getAttribute("datetime"));
+			el.textContent = el.dataset.local === "date" ? date.toLocaleDateString() : date.toLocaleString();
+		});
+
+		// Timeline tooltips
+		const tip = document.getElementById("proto-tooltip");
+		document.addEventListener("mouseover", (e) => {
+			const target = e.target.closest && e.target.closest("[data-tip]");
+			if (!target || !tip) return;
+			tip.textContent = target.getAttribute("data-tip");
+			tip.style.display = "block";
+			tip.style.left = Math.max(8, e.clientX - 60) + "px";
+			tip.style.top = (e.clientY - 16 - tip.offsetHeight) + "px";
+		});
+		document.addEventListener("mouseout", (e) => {
+			if (tip && e.target.closest && e.target.closest("[data-tip]")) tip.style.display = "none";
+		});
 	</script>
 </body>
 </html>`;
 }
 
-function escapeHtml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#039;");
-}

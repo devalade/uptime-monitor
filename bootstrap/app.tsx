@@ -10,14 +10,9 @@ import { lazy } from "@sdxc/lazy-route";
 
 import type { AppDatabase } from "~/app/contracts/database";
 import type { Cache } from "~/app/contracts/cache";
-import type { Transport } from "~/app/contracts/transport";
-import {
-	DatabaseKey,
-	CacheKey,
-	TransportKey,
-	FromEmailKey,
-	AlertEmailKey,
-} from "~/app/http/context";
+import type { AlertSettings } from "~/app/services/alerting";
+import { adminAuth, type AccessSettings } from "~/app/http/auth";
+import { DatabaseKey, CacheKey, AlertsKey } from "~/app/http/context";
 import { createHtmlRenderer } from "~/app/http/render";
 import webRoutes from "~/routes/web";
 import apiRoutes from "~/routes/api";
@@ -25,9 +20,8 @@ import apiRoutes from "~/routes/api";
 export interface ApplicationOptions {
 	db: AppDatabase;
 	cache?: Cache;
-	transport?: Transport;
-	fromEmail?: string;
-	alertEmail?: string;
+	alerts?: AlertSettings;
+	access?: AccessSettings;
 }
 
 /**
@@ -37,12 +31,11 @@ export default function application(options: ApplicationOptions) {
 	const router = createRouter({
 		middleware: [
 			asyncContext(),
+			adminAuth({ access: options.access }),
 			async (ctx, next) => {
 				ctx.set(DatabaseKey, options.db);
 				ctx.set(CacheKey, options.cache);
-				ctx.set(TransportKey, options.transport);
-				ctx.set(FromEmailKey, options.fromEmail ?? "alerts@uptime.local");
-				ctx.set(AlertEmailKey, options.alertEmail ?? "admin@uptime.local");
+				ctx.set(AlertsKey, options.alerts);
 				return next();
 			},
 			renderWith(createHtmlRenderer),
@@ -57,6 +50,8 @@ export default function application(options: ApplicationOptions) {
 	router.map(webRoutes.checkMonitor, lazy(() => import("~/app/http/controllers/trigger-check")) as any);
 	router.map(webRoutes.toggleMonitor, lazy(() => import("~/app/http/controllers/toggle-monitor")) as any);
 	router.map(webRoutes.deleteMonitor, lazy(() => import("~/app/http/controllers/delete-monitor")) as any);
+	router.map(webRoutes.toggleVisibility, lazy(() => import("~/app/http/controllers/toggle-visibility")) as any);
+	router.map(webRoutes.testAlert, lazy(() => import("~/app/http/controllers/test-alert")) as any);
 
 	// API and MCP routes
 	router.map(apiRoutes.mcp, lazy(() => import("~/app/http/controllers/mcp")) as any);

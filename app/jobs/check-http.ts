@@ -4,17 +4,14 @@
 
 import { createJobHandler } from "@sdxc/jobs";
 import type { AppDatabase } from "~/app/contracts/database";
-import type { Transport } from "~/app/contracts/transport";
-import { executeHttpCheck } from "~/app/services/checker";
-import { getMonitorById, recordCheckOutcome } from "~/app/services/monitor-service";
+import type { AlertSettings } from "~/app/services/alerting";
+import { checkMonitor, getMonitorById } from "~/app/services/monitor-service";
 import jobs from "~/app/jobs/definitions";
 import { JobServicesKey } from "~/app/jobs/dispatcher";
 
 export interface JobServicesContext {
 	db: AppDatabase;
-	transport?: Transport;
-	fromEmail?: string;
-	alertEmail?: string;
+	alerts?: AlertSettings;
 }
 
 export default createJobHandler(jobs.checkHttp, async (ctx) => {
@@ -29,20 +26,5 @@ export default createJobHandler(jobs.checkHttp, async (ctx) => {
 		return;
 	}
 
-	const outcome = await executeHttpCheck({
-		url: monitor.url,
-		method: monitor.method,
-		expectedStatus: monitor.expected_status,
-		timeoutSeconds: monitor.timeout_seconds,
-		degradedAfterMs: monitor.degraded_after_ms,
-	});
-
-	await recordCheckOutcome(
-		db,
-		monitor,
-		outcome,
-		services.transport,
-		services.fromEmail,
-		services.alertEmail,
-	);
+	await checkMonitor(db, monitor, services.alerts);
 });

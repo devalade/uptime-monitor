@@ -1,15 +1,15 @@
 /**
- * Toggle Monitor controller for POST /monitors/:id/toggle
- * Pauses or resumes an uptime monitor.
+ * Toggle Visibility controller for POST /monitors/:id/visibility
+ * Shows or hides a monitor on the public status page.
  */
 
 import { createAction } from "remix/router";
 import { requireDatabase } from "~/app/http/context";
 import { redirectBack } from "~/app/http/redirect";
-import { toggleMonitor } from "~/app/services/monitor-service";
+import { toggleMonitorVisibility } from "~/app/services/monitor-service";
 import routes from "~/routes/web";
 
-export default createAction(routes.toggleMonitor, async (ctx) => {
+export default createAction(routes.toggleVisibility, async (ctx) => {
 	const db = requireDatabase(ctx);
 	const id = (ctx as any).params?.id;
 
@@ -17,7 +17,7 @@ export default createAction(routes.toggleMonitor, async (ctx) => {
 		return new Response("Monitor ID required", { status: 400 });
 	}
 
-	const updated = await toggleMonitor(db, id);
+	const updated = await toggleMonitorVisibility(db, id);
 	if (!updated) {
 		return new Response("Monitor not found", { status: 404 });
 	}

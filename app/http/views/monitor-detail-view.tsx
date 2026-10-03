@@ -5,6 +5,8 @@
 
 import type { MonitorDetailData } from "~/app/services/monitor-service";
 import { renderLayout } from "~/app/http/views/layout";
+import { escapeHtml, formatPercentage, renderTime } from "~/app/http/views/html";
+import routes from "~/routes/web";
 
 export function renderMonitorDetailView(data: MonitorDetailData): string {
 	const m = data.monitor;
@@ -19,16 +21,27 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					? "badge-degraded"
 					: "badge-pending";
 
-	const lastChecked = m.last_checked_at
-		? new Date(m.last_checked_at).toLocaleString()
-		: "Never";
+	const lastChecked = m.last_checked_at ? renderTime(m.last_checked_at) : "Never";
+	const nextCheck = isPaused
+		? "Paused — resume to check again"
+		: m.next_due_at
+			? `Next check around ${renderTime(Math.max(m.next_due_at, Date.now()))}`
+			: "Next check within a minute";
+	const uptimeColor =
+		data.uptimePercentage24h === null
+			? "var(--text-muted)"
+			: data.uptimePercentage24h >= 99
+				? "var(--up)"
+				: data.uptimePercentage24h >= 95
+					? "var(--degraded)"
+					: "var(--down)";
 
 	const methodLower = (m.method || "get").toLowerCase();
 	const methodClass = `method-${methodLower}`;
 
 	const content = `
 		<div style="margin-bottom: 1.5rem;">
-			<a href="/" style="font-size: 0.8125rem; font-weight: 500; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.5rem; transition: color 150ms ease;">
+			<a href="${routes.home.href()}" style="font-size: 0.8125rem; font-weight: 500; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.5rem; transition: color 150ms ease;">
 				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
 				Back to All Monitors
 			</a>
@@ -47,7 +60,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					</div>
 					<h1 style="font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; color: #fff; margin-bottom: 0.375rem;">${escapeHtml(m.name)}</h1>
 					<p style="font-family: var(--font-mono); font-size: 0.875rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
-						<a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" style="color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px;">
+						<a href="${/^https?:\/\//i.test(m.url) ? escapeHtml(m.url) : "#"}" target="_blank" rel="noopener" style="color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px;">
 							${escapeHtml(m.url)}
 						</a>
 						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-dim);"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -55,13 +68,13 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 				</div>
 
 				<div style="display: flex; gap: 0.625rem; flex-wrap: wrap;">
-					<form method="POST" action="/monitors/${m.id}/check">
-						<button type="submit" class="btn btn-primary btn-sm">
+					<form method="POST" action="${routes.checkMonitor.href({ id: m.id })}">
+						<button type="submit" class="btn btn-primary btn-sm" data-busy="Checking…">
 							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
 							Check Now
 						</button>
 					</form>
-					<form method="POST" action="/monitors/${m.id}/toggle">
+					<form method="POST" action="${routes.toggleMonitor.href({ id: m.id })}">
 						<button type="submit" class="btn btn-secondary btn-sm">
 							${
 								m.is_enabled
@@ -70,7 +83,12 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 							}
 						</button>
 					</form>
-					<form method="POST" action="/monitors/${m.id}/delete" onsubmit="return confirm('Delete this monitor permanently?');">
+					<form method="POST" action="${routes.toggleVisibility.href({ id: m.id })}">
+						<button type="submit" class="btn btn-secondary btn-sm" title="${m.is_public ? "Currently shown on the public status page" : "Currently hidden from the public status page"}">
+							${m.is_public ? "Hide from status page" : "Show on status page"}
+						</button>
+					</form>
+					<form method="POST" action="${routes.deleteMonitor.href({ id: m.id })}" data-confirm="${escapeHtml(`Delete “${m.name}” and all of its history? This cannot be undone.`)}">
 						<button type="submit" class="btn btn-danger btn-sm">
 							<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
 							Delete
@@ -84,19 +102,19 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 		<section class="stats-grid">
 			<div class="stat-card">
 				<div class="stat-label">24h Uptime</div>
-				<div class="stat-value" style="color: ${data.uptimePercentage24h >= 99 ? "var(--up)" : "var(--degraded)"};">
-					${data.uptimePercentage24h}%
+				<div class="stat-value" style="color: ${uptimeColor};">
+					${formatPercentage(data.uptimePercentage24h)}
 				</div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
-					Past 24-hour success rate
+					${data.uptimePercentage24h === null ? "No checks in the last 24 hours" : "Successful checks, last 24 hours"}
 				</div>
 			</div>
 
 			<div class="stat-card">
-				<div class="stat-label">Average Latency</div>
+				<div class="stat-label">Average response</div>
 				<div class="stat-value">${data.averageLatencyMs}<span style="font-size: 1rem; color: var(--text-muted); margin-left: 4px; font-weight: 500;">ms</span></div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
-					Observed response speed
+					Over the last ${data.results.length} checks
 				</div>
 			</div>
 
@@ -104,7 +122,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 				<div class="stat-label">Check Frequency</div>
 				<div class="stat-value">${m.interval_seconds}<span style="font-size: 1rem; color: var(--text-muted); margin-left: 4px; font-weight: 500;">sec</span></div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
-					Timeout at ${m.timeout_seconds}s
+					Timeout ${m.timeout_seconds}s · expects HTTP ${m.expected_status} · slow after ${m.degraded_after_ms}ms
 				</div>
 			</div>
 
@@ -114,7 +132,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					${lastChecked}
 				</div>
 				<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">
-					Scheduled by cron worker
+					${nextCheck}
 				</div>
 			</div>
 		</section>
@@ -132,8 +150,8 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 					<div style="width: 42px; height: 42px; border-radius: 50%; background: var(--up-bg); display: flex; align-items: center; justify-content: center; margin: 0 auto 0.75rem;">
 						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--up)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
 					</div>
-					<h3 style="font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.25rem;">All checks passing</h3>
-					<p style="color: var(--text-muted); font-size: 0.8125rem;">No outages or performance degradation incidents recorded for this endpoint.</p>
+					<h3 style="font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.25rem;">No incidents</h3>
+					<p style="color: var(--text-muted); font-size: 0.8125rem;">This monitor has not had an outage yet.</p>
 				</div>
 			`
 					: `
@@ -150,10 +168,8 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 						<tbody>
 							${data.incidents
 								.map((inc) => {
-									const started = new Date(inc.started_at).toLocaleString();
-									const resolved = inc.resolved_at
-										? new Date(inc.resolved_at).toLocaleString()
-										: "Ongoing";
+									const started = renderTime(inc.started_at);
+									const resolved = inc.resolved_at ? renderTime(inc.resolved_at) : "Ongoing";
 									const duration = inc.resolved_at
 										? formatDuration(inc.resolved_at - inc.started_at)
 										: '<span class="badge badge-down">Active</span>';
@@ -198,9 +214,11 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 								? `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">No probes recorded yet. Click "Check Now" above to run an instant health check.</td></tr>`
 								: data.results
 										.map((r) => {
-											const badge = r.is_up
-												? '<span class="badge badge-up">UP</span>'
-												: '<span class="badge badge-down">DOWN</span>';
+											const badge = !r.is_up
+												? '<span class="badge badge-down">DOWN</span>'
+												: r.error_message
+													? '<span class="badge badge-degraded">SLOW</span>'
+													: '<span class="badge badge-up">UP</span>';
 											const latencyClass =
 												r.response_time_ms && r.response_time_ms < 500
 													? "color: var(--up);"
@@ -210,7 +228,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 
 											return `
 								<tr>
-									<td style="font-family: var(--font-mono); font-size: 0.8125rem; color: var(--text-secondary);">${new Date(r.created_at).toLocaleString()}</td>
+									<td style="font-family: var(--font-mono); font-size: 0.8125rem; color: var(--text-secondary);">${renderTime(r.created_at)}</td>
 									<td>${badge}</td>
 									<td style="font-family: var(--font-mono); font-weight: 600;">${r.response_status ?? "-"}</td>
 									<td style="font-family: var(--font-mono); font-weight: 600; ${latencyClass}">
@@ -231,7 +249,7 @@ export function renderMonitorDetailView(data: MonitorDetailData): string {
 	`;
 
 	return renderLayout({
-		title: `${m.name} Analytics`,
+		title: m.name,
 		children: content,
 	});
 }
@@ -240,15 +258,9 @@ function formatDuration(ms: number): string {
 	const seconds = Math.floor(ms / 1000);
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
-	const remainingSeconds = seconds % 60;
-	return `${minutes}m ${remainingSeconds}s`;
+	if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ${minutes % 60}m`;
+	return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-function escapeHtml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#039;");
-}

@@ -1,11 +1,13 @@
 /**
  * Production Public Status Page view for Uptime Monitor.
- * Designed with BetterStack Public layout: trust-inspiring hero status,
- * 60-day segmented timeline tick bars, active incident progression, and subscribe dialog.
+ * Overall system status, each service's latest checks and 24h uptime, and incident history.
  */
 
 import { renderLayout } from "~/app/http/views/layout";
+import { escapeHtml, formatPercentage, renderTime, renderTimeline } from "~/app/http/views/html";
 import type { PublicStatusData } from "~/app/services/monitor-service";
+
+export const TIMELINE_LENGTH = 60;
 
 export function renderStatusPageView(data: PublicStatusData): string {
 	const isOperational = data.systemStatus === "operational";
@@ -35,36 +37,6 @@ export function renderStatusPageView(data: PublicStatusData): string {
 		: isDegraded
 			? "#e3b341"
 			: "#ff7b72";
-
-	// Generate 60-tick timeline bars for each public service
-	function renderServiceTicks(segments: ("up" | "down" | "degraded" | "pending")[]): string {
-		const fullSegments = [...segments];
-		while (fullSegments.length < 60) {
-			fullSegments.unshift("up");
-		}
-
-		let html = "";
-		for (let i = 0; i < fullSegments.length; i++) {
-			const seg = fullSegments[i];
-			const daysAgo = fullSegments.length - i;
-			let color = "var(--up)";
-			let note = `Day ${daysAgo}d ago: 100% operational`;
-
-			if (seg === "down") {
-				color = "var(--down)";
-				note = `Day ${daysAgo}d ago: Disruption recorded`;
-			} else if (seg === "degraded") {
-				color = "var(--degraded)";
-				note = `Day ${daysAgo}d ago: Degraded performance`;
-			} else if (seg === "pending") {
-				color = "var(--border-medium)";
-				note = `Day ${daysAgo}d ago: Pending`;
-			}
-
-			html += `<div style="flex: 1; height: 16px; background: ${color}; border-radius: 1px; transition: transform 60ms ease;" onmouseenter="this.style.transform='scaleY(1.35)'; showTickTooltip(event, '${note}')" onmouseleave="this.style.transform='scaleY(1)'; hideTickTooltip()"></div>`;
-		}
-		return html;
-	}
 
 	const content = `
 		<style>
@@ -127,9 +99,6 @@ export function renderStatusPageView(data: PublicStatusData): string {
 					<h1 style="font-size: 1.5rem; font-weight: 700; color: #fff; letter-spacing: -0.02em;">System Status</h1>
 					<p style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.125rem;">Live operational health & historical availability</p>
 				</div>
-				<button type="button" class="btn btn-secondary" data-dialog-open="subscribe-dialog">
-					Subscribe to Updates
-				</button>
 			</div>
 
 			<!-- Hero System Banner -->
@@ -146,7 +115,7 @@ export function renderStatusPageView(data: PublicStatusData): string {
 					</div>
 				</div>
 				<div style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
-					Updated just now
+					Updated ${renderTime(data.generatedAt)}
 				</div>
 			</div>
 
@@ -159,24 +128,23 @@ export function renderStatusPageView(data: PublicStatusData): string {
 						<div style="display: flex; align-items: center; gap: 8px;">
 							<span class="status-dot down"></span>
 							<h3 style="font-size: 0.9375rem; font-weight: 600; color: #ff7b72;">
-								Active Incident: Disruptions Detected
+								Ongoing incident${data.activeIncidents.length > 1 ? "s" : ""}
 							</h3>
 						</div>
-						<span class="badge badge-down">INVESTIGATING</span>
+						<span class="badge badge-down">ONGOING</span>
 					</div>
 
 					<div style="display: flex; flex-direction: column; gap: 1rem; font-size: 0.8125rem;">
 						${data.activeIncidents
 							.map((inc) => {
-								const timeStr = new Date(inc.started_at).toUTCString();
 								return `
-								<div style="border-left: 2px solid #58a6ff; padding-left: 12px;">
-									<div style="display: flex; align-items: center; gap: 8px;">
-										<b style="color: #58a6ff; font-size: 11px; text-transform: uppercase;">Investigating</b>
-										<span style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">${timeStr}</span>
+								<div style="border-left: 2px solid var(--down); padding-left: 12px;">
+									<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+										<b style="color: var(--text-primary);">${escapeHtml(inc.monitorName)}</b>
+										<span style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">since ${renderTime(inc.startedAt)}</span>
 									</div>
 									<div style="color: var(--text-secondary); margin-top: 4px; line-height: 1.5;">
-										${escapeHtml(inc.cause)}
+										This service is not responding as expected. It will update here automatically when it recovers.
 									</div>
 								</div>
 							`;
@@ -191,9 +159,9 @@ export function renderStatusPageView(data: PublicStatusData): string {
 			<!-- Services Component Group -->
 			<div class="service-group">
 				<div class="service-group-header">
-					<span>Monitored Platform Endpoints</span>
-					<span style="color: var(--up); font-family: var(--font-mono); font-weight: 600;">
-						${data.overallUptime24h}% 24h fleet uptime
+					<span>Services</span>
+					<span style="color: var(--text-muted); font-family: var(--font-mono); font-weight: 600;">
+						${formatPercentage(data.overallUptime24h)} uptime, last 24h
 					</span>
 				</div>
 
@@ -201,7 +169,7 @@ export function renderStatusPageView(data: PublicStatusData): string {
 					data.services.length === 0
 						? `
 					<div style="padding: 2.5rem; text-align: center; color: var(--text-muted);">
-						No public services are currently registered.
+						No services are being monitored yet.
 					</div>
 				`
 						: data.services
@@ -216,7 +184,7 @@ export function renderStatusPageView(data: PublicStatusData): string {
 											? "Disruption"
 											: isDeg
 												? "Degraded"
-												: "Pending";
+												: "Awaiting first check";
 
 									const statusClass = isUp
 										? "var(--up)"
@@ -237,16 +205,14 @@ export function renderStatusPageView(data: PublicStatusData): string {
 										</span>
 									</div>
 
-									<div style="display: flex; gap: 2px; align-items: center;">
-										${renderServiceTicks(svc.historySegments)}
-									</div>
+									${renderTimeline(svc.recentChecks, TIMELINE_LENGTH, 16)}
 
 									<div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); margin-top: 6px; font-family: var(--font-mono);">
-										<span>60 checks ago</span>
-										<span style="color: ${isDown ? "var(--down)" : "var(--up)"}; font-weight: 600;">
-											${svc.uptimePercentage24h}% availability
+										<span>Older</span>
+										<span style="color: ${isDown ? "var(--down)" : "var(--text-muted)"}; font-weight: 600;">
+											${formatPercentage(svc.uptimePercentage24h)} uptime (24h)
 										</span>
-										<span>Today</span>
+										<span>Now</span>
 									</div>
 								</div>
 							`;
@@ -258,27 +224,25 @@ export function renderStatusPageView(data: PublicStatusData): string {
 			<!-- Past Incident Archive -->
 			<div style="margin-top: 2.5rem; border-top: 1px solid var(--border-subtle); padding-top: 1.5rem;">
 				<h4 style="font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 1rem; letter-spacing: 0.04em;">
-					Past Incident History
+					Past 7 days
 				</h4>
 
 				${
 					data.pastIncidents.length === 0
 						? `
 					<div style="color: var(--text-dim); font-size: 0.8125rem; padding: 0.5rem 0;">
-						No past incidents recorded in the last 7 days. All systems operating nominally.
+						No incidents in the last 7 days.
 					</div>
 				`
 						: `
 					<div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.8125rem;">
 						${data.pastIncidents
 							.map((inc) => {
-								const resolvedDate = inc.resolved_at
-									? new Date(inc.resolved_at).toLocaleDateString()
-									: "Recent";
+								const minutes = Math.max(1, Math.round(((inc.resolvedAt ?? inc.startedAt) - inc.startedAt) / 60000));
 								return `
-								<div style="display: flex; justify-content: space-between; align-items: center; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.5rem;">
-									<span>${resolvedDate} — ${escapeHtml(inc.cause)}</span>
-									<span style="color: var(--up); font-weight: 500;">Resolved</span>
+								<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.5rem;">
+									<span>${renderTime(inc.startedAt, "date")} — <b style="color: var(--text-secondary);">${escapeHtml(inc.monitorName)}</b> was unavailable</span>
+									<span style="color: var(--up); font-weight: 500; white-space: nowrap;">Resolved after ${minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`}</span>
 								</div>
 							`;
 							})
@@ -289,40 +253,12 @@ export function renderStatusPageView(data: PublicStatusData): string {
 			</div>
 		</div>
 
-		<!-- Subscribe Dialog -->
-		<dialog id="subscribe-dialog">
-			<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-				<h3 style="font-size: 1rem; font-weight: 600; color: #fff;">Subscribe to Status Updates</h3>
-				<button type="button" class="btn btn-secondary btn-sm" data-dialog-close style="border-radius: 50%; width: 26px; height: 26px; padding: 0;">✕</button>
-			</div>
-			<p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.5;">
-				Receive automated notifications via email whenever service incidents or scheduled maintenance occur.
-			</p>
-			<form onsubmit="event.preventDefault(); alert('Subscribed! You will receive email alerts for system incidents.'); this.closest('dialog').close();">
-				<div class="form-group">
-					<label for="sub-email">Your Email Address</label>
-					<input type="email" id="sub-email" class="form-control" placeholder="admin@example.com" required />
-				</div>
-				<div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem;">
-					<button type="button" class="btn btn-secondary" data-dialog-close>Cancel</button>
-					<button type="submit" class="btn btn-primary">Subscribe</button>
-				</div>
-			</form>
-		</dialog>
 	`;
 
 	return renderLayout({
-		title: "Public Status Page",
+		title: "Status",
 		children: content,
-		currentPath: "/status",
+		variant: "public",
 	});
 }
 
-function escapeHtml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#039;");
-}
