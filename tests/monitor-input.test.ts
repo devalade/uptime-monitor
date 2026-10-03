@@ -19,6 +19,8 @@ describe("monitor input", () => {
 			keywordMode: "contains",
 			jsonPath: null,
 			jsonExpected: null,
+			dnsRecordType: "A",
+			dnsExpected: null,
 			intervalSeconds: 60,
 			timeoutSeconds: 10,
 			degradedAfterMs: 3000,
@@ -26,6 +28,8 @@ describe("monitor input", () => {
 			failureThreshold: 1,
 			reminderMinutes: 0,
 			alertChannelIds: null,
+			expiryWarningDays: 14,
+			alertOnDegraded: false,
 			isPublic: true,
 		});
 	});

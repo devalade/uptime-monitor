@@ -4,6 +4,7 @@
  * Private and paused monitors get 404, so their existence is not revealed.
  */
 
+import type { SafeHtml } from "remix/html-template";
 import { createAction } from "remix/router";
 import { renderBadge, uptimeColor, type BadgeColor } from "~/app/http/views/badge";
 import { getMonitorById } from "~/app/services/monitor-service";
@@ -22,9 +23,9 @@ export default createAction(routes.statusBadge, async (ctx) => {
 		return new Response("Not found", { status: 404 });
 	}
 
-	const params = new URL(ctx.request.url).searchParams;
+	const params = ctx.url.searchParams;
 	const label = (params.get("label") || monitor.name).slice(0, 40);
-	let svg: string;
+	let svg: SafeHtml;
 
 	if (params.get("type") === "uptime") {
 		const days = UPTIME_PERIODS.find((p) => String(p) === params.get("days")) ?? (30 satisfies UptimePeriod);
@@ -35,7 +36,7 @@ export default createAction(routes.statusBadge, async (ctx) => {
 		svg = renderBadge(label, badge.message, badge.color);
 	}
 
-	return new Response(svg, {
+	return new Response(String(svg), {
 		headers: {
 			"Content-Type": "image/svg+xml; charset=utf-8",
 			"Cache-Control": "public, max-age=60, s-maxage=60",

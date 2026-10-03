@@ -1,10 +1,10 @@
 /**
- * Probe engine for uptime checks: HTTP(S) requests with response assertions, and TCP connects.
- * Pure Web APIs (fetch, AbortSignal.timeout, cloudflare:sockets), so the same code runs in the
- * Worker and in the regional probe Durable Objects.
+ * Probe engine for uptime checks: HTTP(S) requests with response assertions, TCP connects and
+ * DNS lookups. Pure Web APIs (fetch, AbortSignal.timeout, cloudflare:sockets), so the same code
+ * runs in the Worker and in the regional probe Durable Objects.
  */
 
-import type { HttpMethod, KeywordMode, MonitorStatus } from "~/database/schema";
+import type { DnsRecordType, HttpMethod, KeywordMode, MonitorStatus } from "~/database/schema";
 
 /** Response bodies are only read when an assertion needs them, and never past this size. */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -33,8 +33,20 @@ export interface TcpCheckOptions {
 	degradedAfterMs: number;
 }
 
+export interface DnsCheckOptions {
+	host: string;
+	recordType: DnsRecordType;
+	/** Comma-separated values the answer must contain; null accepts any answer. */
+	expected: string | null;
+	timeoutSeconds: number;
+	degradedAfterMs: number;
+}
+
 /** A probe that can be sent to another location and run there. */
-export type ProbeRequest = ({ type: "http" } & HttpCheckOptions) | ({ type: "tcp" } & TcpCheckOptions);
+export type ProbeRequest =
+	| ({ type: "http" } & HttpCheckOptions)
+	| ({ type: "tcp" } & TcpCheckOptions)
+	| ({ type: "dns" } & DnsCheckOptions);
 
 export interface CheckOutcome {
 	status: MonitorStatus;
@@ -44,7 +56,9 @@ export interface CheckOutcome {
 }
 
 export function runProbe(request: ProbeRequest): Promise<CheckOutcome> {
-	return request.type === "tcp" ? executeTcpCheck(request) : executeHttpCheck(request);
+	if (request.type === "tcp") return executeTcpCheck(request);
+	if (request.type === "dns") return executeDnsCheck(request);
+	return executeHttpCheck(request);
 }
 
 /**
@@ -213,6 +227,84 @@ async function readBodyText(response: Response): Promise<string> {
 		offset += part.length;
 	}
 	return new TextDecoder().decode(bytes);
+}
+
+/* ---------- DNS ---------- */
+
+const DNS_RESOLVER = "https://cloudflare-dns.com/dns-query";
+
+const dnsTypeNumbers: Record<DnsRecordType, number> = { A: 1, NS: 2, CNAME: 5, MX: 15, TXT: 16, AAAA: 28 };
+
+const dnsStatusNames: Record<number, string> = {
+	1: "the query was malformed (FORMERR)",
+	2: "the DNS server failed (SERVFAIL)",
+	3: "the name does not exist (NXDOMAIN)",
+	5: "the query was refused (REFUSED)",
+};
+
+/**
+ * Resolves a record through DNS over HTTPS. Passes when the name resolves to at least one record
+ * of the type and the answer contains every expected value.
+ */
+export async function executeDnsCheck(options: DnsCheckOptions): Promise<CheckOutcome> {
+	const startTime = performance.now();
+	try {
+		const url = `${DNS_RESOLVER}?name=${encodeURIComponent(options.host)}&type=${options.recordType}`;
+		const response = await fetch(url, {
+			headers: { Accept: "application/dns-json" },
+			signal: AbortSignal.timeout(Math.max(1, options.timeoutSeconds) * 1000),
+		});
+		const responseTimeMs = Math.round(performance.now() - startTime);
+		const down = (errorMessage: string): CheckOutcome => ({ status: "down", statusCode: null, responseTimeMs, errorMessage });
+
+		if (!response.ok) {
+			await response.body?.cancel();
+			return down(`The DNS resolver answered HTTP ${response.status}`);
+		}
+		const result = (await response.json()) as { Status?: number; Answer?: { type: number; data: string }[] };
+		if (result.Status !== 0) {
+			return down(`Resolving ${options.host}: ${dnsStatusNames[result.Status ?? -1] ?? `DNS status ${result.Status}`}`);
+		}
+
+		const answers = (result.Answer ?? []).filter((a) => a.type === dnsTypeNumbers[options.recordType]).map((a) => normalizeDnsValue(a.data));
+		if (answers.length === 0) return down(`${options.host} has no ${options.recordType} record`);
+
+		const missing = parseDnsExpected(options.expected).filter((value) => !answers.some((answer) => dnsValueMatches(answer, value)));
+		if (missing.length > 0) {
+			return down(`${options.recordType} for ${options.host} is ${truncate(answers.join(", "), 120)}; missing ${missing.join(", ")}`);
+		}
+
+		if (responseTimeMs >= options.degradedAfterMs) {
+			return {
+				status: "degraded",
+				statusCode: null,
+				responseTimeMs,
+				errorMessage: `DNS lookup took ${responseTimeMs}ms, over the threshold of ${options.degradedAfterMs}ms`,
+			};
+		}
+		return { status: "up", statusCode: null, responseTimeMs };
+	} catch (error) {
+		return failedOutcome(error, startTime, options.timeoutSeconds, `Could not resolve ${options.host}`);
+	}
+}
+
+export function parseDnsExpected(expected: string | null): string[] {
+	return (expected ?? "").split(",").map(normalizeDnsValue).filter(Boolean);
+}
+
+/** Lower case, no trailing dot, TXT quotes removed. */
+function normalizeDnsValue(value: string): string {
+	return value
+		.trim()
+		.replace(/^"|"$/g, "")
+		.replace(/"\s+"/g, "")
+		.replace(/\.$/, "")
+		.toLowerCase();
+}
+
+/** MX answers carry a priority ("10 mx.example.com"); the host alone matches too. */
+function dnsValueMatches(answer: string, expected: string): boolean {
+	return answer === expected || answer.endsWith(` ${expected}`);
 }
 
 /* ---------- Accepted status codes ---------- */

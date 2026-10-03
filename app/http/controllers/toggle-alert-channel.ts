@@ -3,6 +3,7 @@
  * Turns a channel off or back on without deleting it.
  */
 
+import { createRedirectResponse } from "remix/response/redirect";
 import { createAction } from "remix/router";
 import { toggleAlertChannel } from "~/app/services/alert-channels";
 import routes from "~/routes/web";
@@ -12,5 +13,5 @@ export default createAction(routes.toggleAlertChannel, async (ctx) => {
 	if (!updated) {
 		return new Response("Channel not found", { status: 404 });
 	}
-	return Response.redirect(`${new URL(ctx.request.url).origin}${routes.alertChannels.href()}`, 303);
+	return createRedirectResponse(routes.alertChannels.href(), 303);
 });

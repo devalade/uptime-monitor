@@ -3,12 +3,13 @@
  * Returns field-level errors instead of throwing so callers can show them to the user.
  */
 
-import { httpMethods, keywordModes, monitorTypes, type MonitorType } from "~/database/schema";
+import { dnsRecordTypes, httpMethods, keywordModes, monitorTypes, type MonitorType } from "~/database/schema";
 import { parseHeaderLines, parseJsonPath, parseStatusSpec } from "~/app/services/checker";
 import { defaultMonitorSettings, type MonitorSettings } from "~/app/services/monitor-service";
 
-/** Cron fires once a minute, so shorter intervals cannot be honoured. */
+/** The cron sweep runs every minute and again half a minute later, so 30 seconds is the shortest interval. */
 export const intervalOptions = [
+	{ seconds: 30, label: "Every 30 seconds" },
 	{ seconds: 60, label: "Every minute" },
 	{ seconds: 120, label: "Every 2 minutes" },
 	{ seconds: 300, label: "Every 5 minutes" },
@@ -24,6 +25,7 @@ export const intervalOptions = [
 export const monitorTypeLabels: Record<MonitorType, string> = {
 	http: "HTTP(S) — request a URL",
 	tcp: "TCP port — open a connection",
+	dns: "DNS record — resolve a name",
 	heartbeat: "Heartbeat — your job pings us",
 };
 
@@ -43,6 +45,9 @@ export type MonitorFormField =
 	| "keyword_mode"
 	| "json_path"
 	| "json_expected"
+	| "dns_host"
+	| "dns_record_type"
+	| "dns_expected"
 	| "interval_seconds"
 	| "timeout_seconds"
 	| "degraded_after_ms"
@@ -51,6 +56,8 @@ export type MonitorFormField =
 	| "reminder_minutes"
 	| "alert_mode"
 	| "alert_channels"
+	| "expiry_warning_days"
+	| "alert_on_degraded"
 	| "is_public";
 export type MonitorFormValues = Partial<Record<MonitorFormField, string>>;
 export type MonitorFormErrors = Partial<Record<MonitorFormField, string>>;
@@ -68,6 +75,9 @@ export const monitorFormFields: MonitorFormField[] = [
 	"keyword_mode",
 	"json_path",
 	"json_expected",
+	"dns_host",
+	"dns_record_type",
+	"dns_expected",
 	"interval_seconds",
 	"timeout_seconds",
 	"degraded_after_ms",
@@ -76,6 +86,8 @@ export const monitorFormFields: MonitorFormField[] = [
 	"reminder_minutes",
 	"alert_mode",
 	"alert_channels",
+	"expiry_warning_days",
+	"alert_on_degraded",
 	"is_public",
 ];
 
@@ -113,9 +125,22 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 			url = target;
 			defaultName = target;
 		}
+	} else if (type === "dns") {
+		const host = (values.dns_host ?? "").trim().toLowerCase().replace(/\.$/, "");
+		if (!isValidHostname(host)) {
+			errors.dns_host = host ? "Enter a domain name, e.g. example.com." : "Enter the domain name to resolve.";
+		} else {
+			url = host;
+			defaultName = host;
+		}
 	} else if (type === "heartbeat") {
 		defaultName = "Heartbeat";
 	}
+
+	const dnsRecordType = dnsRecordTypes.find((t) => t === (values.dns_record_type || "A"));
+	if (!dnsRecordType) errors.dns_record_type = `Record type must be one of ${dnsRecordTypes.join(", ")}.`;
+	const dnsExpected = type === "dns" ? optional(values.dns_expected) : null;
+	if (dnsExpected && dnsExpected.length > 500) errors.dns_expected = "Expected values must be 500 characters or fewer.";
 
 	const name = values.name?.trim() || defaultName;
 	if (name.length > 100) errors.name = "Name must be 100 characters or fewer.";
@@ -162,9 +187,10 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 	// Timing
 	const intervalSeconds = readInteger(values.interval_seconds, defaults.intervalSeconds);
 	const maxInterval = type === "heartbeat" ? MAX_HEARTBEAT_INTERVAL : MAX_PROBE_INTERVAL;
-	if (intervalSeconds === null || intervalSeconds < 60 || intervalSeconds > maxInterval) {
+	const minInterval = type === "heartbeat" ? 60 : 30;
+	if (intervalSeconds === null || intervalSeconds < minInterval || intervalSeconds > maxInterval) {
 		errors.interval_seconds =
-			type === "heartbeat" ? "Expected period must be between 1 minute and 30 days." : "Interval must be between 60 seconds and 24 hours.";
+			type === "heartbeat" ? "Expected period must be between 1 minute and 30 days." : "Interval must be between 30 seconds and 24 hours.";
 	}
 
 	const timeoutSeconds = readInteger(values.timeout_seconds, defaults.timeoutSeconds);
@@ -193,6 +219,11 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 		errors.reminder_minutes = "Reminders must be 0 (off) or up to 10080 minutes (a week).";
 	}
 
+	const expiryWarningDays = readInteger(values.expiry_warning_days, defaults.expiryWarningDays);
+	if (expiryWarningDays === null || expiryWarningDays < 0 || expiryWarningDays > 90) {
+		errors.expiry_warning_days = "Use 0 (off) to 90 days.";
+	}
+
 	const selectedChannels = (values.alert_channels ?? "").split(",").map((id) => id.trim()).filter(Boolean);
 	const alertChannelIds = values.alert_mode === "selected" ? selectedChannels : null;
 
@@ -206,7 +237,9 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 		degradedAfterMs === null ||
 		graceSeconds === null ||
 		failureThreshold === null ||
-		reminderMinutes === null
+		reminderMinutes === null ||
+		expiryWarningDays === null ||
+		!dnsRecordType
 	) {
 		return { ok: false, errors };
 	}
@@ -226,6 +259,8 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 			keywordMode,
 			jsonPath: isHttp ? jsonPath : null,
 			jsonExpected: isHttp && jsonPath ? jsonExpected : null,
+			dnsRecordType,
+			dnsExpected,
 			intervalSeconds,
 			timeoutSeconds,
 			degradedAfterMs,
@@ -233,6 +268,8 @@ export function parseMonitorInput(values: MonitorFormValues): MonitorInputResult
 			failureThreshold,
 			reminderMinutes,
 			alertChannelIds,
+			expiryWarningDays,
+			alertOnDegraded: values.alert_on_degraded === "on" || values.alert_on_degraded === "true",
 			// A checkbox: present ("on") when ticked, absent when not. Defaults to public.
 			isPublic: values.is_public === undefined || values.is_public === "on" || values.is_public === "true",
 		},
@@ -254,6 +291,11 @@ export function settingsToFormValues(settings: MonitorSettings): MonitorFormValu
 		name: settings.name,
 		url: settings.type === "http" ? settings.url : "",
 		tcp_target: settings.type === "tcp" ? settings.url : "",
+		dns_host: settings.type === "dns" ? settings.url : "",
+		dns_record_type: settings.dnsRecordType,
+		dns_expected: settings.dnsExpected ?? "",
+		expiry_warning_days: String(settings.expiryWarningDays),
+		alert_on_degraded: settings.alertOnDegraded ? "on" : "",
 		method: settings.method,
 		expected_statuses: settings.expectedStatuses,
 		request_headers: settings.requestHeaders ?? "",
@@ -272,6 +314,10 @@ export function settingsToFormValues(settings: MonitorSettings): MonitorFormValu
 		alert_channels: (settings.alertChannelIds ?? []).join(","),
 		is_public: settings.isPublic ? "on" : "",
 	};
+}
+
+export function isValidHostname(host: string): boolean {
+	return host.length <= 253 && /^[a-z0-9_]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9])?)+$/.test(host);
 }
 
 export function isValidTcpTarget(target: string): boolean {

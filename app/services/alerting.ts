@@ -1,8 +1,9 @@
 /**
  * Alerting service for uptime incident notifications.
  * Sends each alert to every channel that applies (email and webhook from the environment,
- * plus webhook, Telegram and PagerDuty channels added on the dashboard). A channel that fails
- * is logged and never stops the others or the check that triggered it.
+ * plus webhook, Telegram, PagerDuty, Pushover, Opsgenie, Twilio SMS and email channels added on
+ * the dashboard). A channel that fails is logged and never stops the others or the check that
+ * triggered it.
  */
 
 import { Mailer } from "@sdxc/mail";
@@ -20,11 +21,21 @@ export interface EmailAlerts {
 	to: string;
 }
 
-/** Channels configured through the Worker environment. */
+/** Sends email from the Worker: the send_email binding and a sender address. */
+export interface MailSender {
+	transport: Transport;
+	from: string;
+}
+
+/** Channels and services configured through the Worker environment. */
 export interface AlertSettings {
 	email?: EmailAlerts;
-	/** Discord, Slack and ntfy.sh URLs get their native format; anything else gets JSON. */
+	/** Discord, Slack, ntfy.sh, Teams and Google Chat URLs get their native format; anything else gets JSON. */
 	webhookUrl?: string;
+	/** Lets dashboard email channels and status page subscribers receive mail. */
+	mailer?: MailSender;
+	/** Public origin of this app, for links in emails. */
+	publicUrl?: string;
 }
 
 /** Ids of the environment channels, so a monitor can pick them like any other channel. */
@@ -35,9 +46,32 @@ export type AlertChannel =
 	| { id: string; name: string; kind: "email"; email: EmailAlerts }
 	| { id: string; name: string; kind: "webhook"; url: string }
 	| { id: string; name: string; kind: "telegram"; botToken: string; chatId: string }
-	| { id: string; name: string; kind: "pagerduty"; routingKey: string };
+	| { id: string; name: string; kind: "pagerduty"; routingKey: string }
+	| { id: string; name: string; kind: "pushover"; token: string; user: string }
+	| { id: string; name: string; kind: "opsgenie"; apiKey: string; region: "us" | "eu" }
+	| { id: string; name: string; kind: "twilio"; accountSid: string; authToken: string; from: string; to: string };
 
-export type AlertKind = "down" | "recovered" | "reminder";
+export type AlertKind =
+	| "down"
+	| "recovered"
+	| "reminder"
+	| "degraded"
+	| "normal"
+	| "cert_expiring"
+	| "cert_renewed"
+	| "domain_expiring"
+	| "domain_renewed";
+
+/** Alerts that open a problem; the rest close one. */
+const problemKinds = new Set<AlertKind>(["down", "reminder", "degraded", "cert_expiring", "domain_expiring"]);
+
+/** Problems that close each other share a family, e.g. a PagerDuty dedup key. */
+function alertFamily(kind: AlertKind): "status" | "slow" | "cert" | "domain" {
+	if (kind === "degraded" || kind === "normal") return "slow";
+	if (kind === "cert_expiring" || kind === "cert_renewed") return "cert";
+	if (kind === "domain_expiring" || kind === "domain_renewed") return "domain";
+	return "status";
+}
 
 export interface IncidentAlertPayload {
 	monitor: Pick<SelectMonitor, "id" | "name" | "url">;
@@ -47,6 +81,8 @@ export interface IncidentAlertPayload {
 	timestamp: number;
 	/** A repeat of the DOWN alert while the outage lasts. */
 	isReminder?: boolean;
+	/** For alerts other than down / reminder / recovered. */
+	kind?: AlertKind;
 	/** Marks alerts sent from the "Send test alert" buttons. */
 	isTest?: boolean;
 }
@@ -72,10 +108,11 @@ export async function loadAlertChannels(db: AppDatabase, settings?: AlertSetting
 		where: eq(alertChannels.is_enabled, true),
 		orderBy: [["created_at", "asc"]],
 	});
-	return [...envChannels(settings), ...rows.flatMap((row) => toAlertChannel(row) ?? [])];
+	return [...envChannels(settings), ...rows.flatMap((row) => toAlertChannel(row, settings) ?? [])];
 }
 
-export function toAlertChannel(row: SelectAlertChannel): AlertChannel | null {
+/** The channel a dashboard row describes, or null when its settings are incomplete. */
+export function toAlertChannel(row: SelectAlertChannel, settings?: AlertSettings): AlertChannel | null {
 	const config = parseJsonObject(row.config);
 	const text = (key: string) => (typeof config[key] === "string" ? (config[key] as string) : "");
 
@@ -87,6 +124,26 @@ export function toAlertChannel(row: SelectAlertChannel): AlertChannel | null {
 	}
 	if (row.type === "pagerduty" && text("routingKey")) {
 		return { id: row.id, name: row.name, kind: "pagerduty", routingKey: text("routingKey") };
+	}
+	if (row.type === "pushover" && text("token") && text("user")) {
+		return { id: row.id, name: row.name, kind: "pushover", token: text("token"), user: text("user") };
+	}
+	if (row.type === "opsgenie" && text("apiKey")) {
+		return { id: row.id, name: row.name, kind: "opsgenie", apiKey: text("apiKey"), region: text("region") === "eu" ? "eu" : "us" };
+	}
+	if (row.type === "twilio" && text("accountSid") && text("authToken") && text("from") && text("to")) {
+		return {
+			id: row.id,
+			name: row.name,
+			kind: "twilio",
+			accountSid: text("accountSid"),
+			authToken: text("authToken"),
+			from: text("from"),
+			to: text("to"),
+		};
+	}
+	if (row.type === "email" && text("to") && settings?.mailer) {
+		return { id: row.id, name: row.name, kind: "email", email: { ...settings.mailer, to: text("to") } };
 	}
 	return null;
 }
@@ -144,29 +201,50 @@ export function testAlertPayload(origin: string): IncidentAlertPayload {
 /* ---------- Message formats ---------- */
 
 export function alertKind(payload: IncidentAlertPayload): AlertKind {
+	if (payload.kind) return payload.kind;
 	if (payload.currentStatus !== "down") return "recovered";
 	return payload.isReminder ? "reminder" : "down";
 }
 
+const alertLabels: Record<AlertKind, string> = {
+	down: "🚨 DOWN",
+	reminder: "⏰ STILL DOWN",
+	recovered: "✅ RECOVERED",
+	degraded: "🐢 SLOW",
+	normal: "✅ BACK TO NORMAL",
+	cert_expiring: "⚠️ CERTIFICATE EXPIRING",
+	cert_renewed: "✅ CERTIFICATE RENEWED",
+	domain_expiring: "⚠️ DOMAIN EXPIRING",
+	domain_renewed: "✅ DOMAIN RENEWED",
+};
+
 export function describeAlert(payload: IncidentAlertPayload): { isDown: boolean; title: string; body: string } {
 	const kind = alertKind(payload);
-	const label = kind === "down" ? "🚨 DOWN" : kind === "reminder" ? "⏰ STILL DOWN" : "✅ RECOVERED";
+	const label = alertLabels[kind];
 	const title = `${payload.isTest ? "[TEST] " : ""}${label}: ${payload.monitor.name}`;
 	const body = [
 		payload.monitor.url ? `URL: ${payload.monitor.url}` : "",
-		`Status: ${payload.currentStatus.toUpperCase()} (was ${payload.previousStatus ? payload.previousStatus.toUpperCase() : "UNKNOWN"})`,
+		alertFamily(kind) === "status" || alertFamily(kind) === "slow"
+			? `Status: ${payload.currentStatus.toUpperCase()} (was ${payload.previousStatus ? payload.previousStatus.toUpperCase() : "UNKNOWN"})`
+			: "",
 		`Reason: ${payload.reason}`,
 		`Time: ${new Date(payload.timestamp).toISOString()}`,
 	]
 		.filter(Boolean)
 		.join("\n");
-	return { isDown: kind !== "recovered", title, body };
+	return { isDown: problemKinds.has(kind), title, body };
 }
 
 const webhookEvents: Record<AlertKind, string> = {
 	down: "monitor.down",
 	reminder: "monitor.still_down",
 	recovered: "monitor.recovered",
+	degraded: "monitor.degraded",
+	normal: "monitor.normal",
+	cert_expiring: "monitor.certificate_expiring",
+	cert_renewed: "monitor.certificate_renewed",
+	domain_expiring: "monitor.domain_expiring",
+	domain_renewed: "monitor.domain_renewed",
 };
 
 /**
@@ -181,6 +259,32 @@ export function buildWebhookRequest(webhookUrl: string, payload: IncidentAlertPa
 	}
 	if (host === "hooks.slack.com") {
 		return { url: webhookUrl, init: postJson({ text: `*${title}*\n${body}` }) };
+	}
+	if (host === "chat.googleapis.com") {
+		return { url: webhookUrl, init: postJson({ text: `*${title}*\n${body}` }) };
+	}
+	if (isTeamsWebhook(host)) {
+		// Teams workflows ("Post to a channel when a webhook request is received") take an Adaptive Card.
+		return {
+			url: webhookUrl,
+			init: postJson({
+				type: "message",
+				attachments: [
+					{
+						contentType: "application/vnd.microsoft.card.adaptive",
+						content: {
+							type: "AdaptiveCard",
+							$schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+							version: "1.4",
+							body: [
+								{ type: "TextBlock", text: title, weight: "Bolder", size: "Medium", wrap: true, color: isDown ? "Attention" : "Good" },
+								{ type: "TextBlock", text: body.replace(/\n/g, "\n\n"), wrap: true },
+							],
+						},
+					},
+				],
+			}),
+		};
 	}
 	if (host === "ntfy.sh") {
 		return {
@@ -223,9 +327,13 @@ export function buildTelegramRequest(
 	};
 }
 
+function isTeamsWebhook(host: string): boolean {
+	return host.endsWith(".webhook.office.com") || host.endsWith(".logic.azure.com") || host.endsWith(".powerplatform.com");
+}
+
 /**
- * PagerDuty Events API v2. One dedup key per monitor, so DOWN, reminders and RECOVERED
- * all land on the same PagerDuty incident.
+ * PagerDuty Events API v2. One dedup key per monitor and problem family, so DOWN, reminders
+ * and RECOVERED all land on the same PagerDuty incident.
  */
 export function buildPagerDutyRequests(
 	channel: { routingKey: string },
@@ -233,7 +341,8 @@ export function buildPagerDutyRequests(
 ): { url: string; init: RequestInit }[] {
 	const { isDown, title } = describeAlert(payload);
 	const url = "https://events.pagerduty.com/v2/enqueue";
-	const dedupKey = `uptime-monitor-${payload.monitor.id}`;
+	const family = alertFamily(alertKind(payload));
+	const dedupKey = `uptime-monitor-${payload.monitor.id}${family === "status" ? "" : `-${family}`}`;
 	const trigger = {
 		url,
 		init: postJson({
@@ -243,7 +352,7 @@ export function buildPagerDutyRequests(
 			payload: {
 				summary: `${title} — ${payload.reason}`.slice(0, 1024),
 				source: payload.monitor.url || payload.monitor.name,
-				severity: payload.isTest ? "info" : "critical",
+				severity: payload.isTest ? "info" : family === "status" ? "critical" : "warning",
 				timestamp: new Date(payload.timestamp).toISOString(),
 			},
 		}),
@@ -256,6 +365,76 @@ export function buildPagerDutyRequests(
 	// A test opens and closes a PagerDuty incident straight away, so nobody stays paged.
 	if (payload.isTest) return [trigger, resolve];
 	return [isDown ? trigger : resolve];
+}
+
+export function buildPushoverRequest(channel: { token: string; user: string }, payload: IncidentAlertPayload): { url: string; init: RequestInit } {
+	const { isDown, title, body } = describeAlert(payload);
+	return {
+		url: "https://api.pushover.net/1/messages.json",
+		init: postJson({
+			token: channel.token,
+			user: channel.user,
+			title: title.slice(0, 250),
+			message: body.slice(0, 1024),
+			priority: isDown && alertFamily(alertKind(payload)) === "status" ? 1 : 0,
+			url: payload.monitor.url || undefined,
+		}),
+	};
+}
+
+/**
+ * Opsgenie Alert API: problems create an alert, keyed by an alias per monitor and family;
+ * the matching resolution closes it.
+ */
+export function buildOpsgenieRequest(
+	channel: { apiKey: string; region: "us" | "eu" },
+	payload: IncidentAlertPayload,
+): { url: string; init: RequestInit } {
+	const { isDown, title, body } = describeAlert(payload);
+	const base = channel.region === "eu" ? "https://api.eu.opsgenie.com/v2/alerts" : "https://api.opsgenie.com/v2/alerts";
+	const family = alertFamily(alertKind(payload));
+	const alias = `uptime-monitor-${payload.monitor.id}-${payload.isTest ? "test" : family}`;
+	const headers = { "Content-Type": "application/json", Authorization: `GenieKey ${channel.apiKey}` };
+
+	if (!isDown && !payload.isTest) {
+		return {
+			url: `${base}/${encodeURIComponent(alias)}/close?identifierType=alias`,
+			init: { method: "POST", headers, body: JSON.stringify({ source: "uptime-monitor", note: body }) },
+		};
+	}
+	return {
+		url: base,
+		init: {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				message: title.slice(0, 130),
+				alias,
+				description: body,
+				source: "uptime-monitor",
+				priority: payload.isTest ? "P5" : family === "status" ? "P1" : "P3",
+			}),
+		},
+	};
+}
+
+export function buildTwilioRequest(
+	channel: { accountSid: string; authToken: string; from: string; to: string },
+	payload: IncidentAlertPayload,
+): { url: string; init: RequestInit } {
+	const { title } = describeAlert(payload);
+	const text = `${title} — ${payload.reason}`.slice(0, 320);
+	return {
+		url: `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(channel.accountSid)}/Messages.json`,
+		init: {
+			method: "POST",
+			headers: {
+				Authorization: `Basic ${btoa(`${channel.accountSid}:${channel.authToken}`)}`,
+				"Content-Type": "application/x-www-form-urlencoded",
+			},
+			body: new URLSearchParams({ To: channel.to, From: channel.from, Body: text }).toString(),
+		},
+	};
 }
 
 /* ---------- Delivery ---------- */
@@ -275,6 +454,18 @@ async function sendToChannel(channel: AlertChannel, payload: IncidentAlertPayloa
 		case "pagerduty":
 			for (const { url, init } of buildPagerDutyRequests(channel, payload)) await post(url, init, "PagerDuty");
 			return;
+		case "pushover": {
+			const { url, init } = buildPushoverRequest(channel, payload);
+			return post(url, init, "Pushover");
+		}
+		case "opsgenie": {
+			const { url, init } = buildOpsgenieRequest(channel, payload);
+			return post(url, init, "Opsgenie");
+		}
+		case "twilio": {
+			const { url, init } = buildTwilioRequest(channel, payload);
+			return post(url, init, "Twilio");
+		}
 	}
 }
 

@@ -40,22 +40,28 @@ An edge-native uptime monitoring service built with **Remix 3** and Sergio Xalam
 | `/monitors/:id` | Admin | Edit a monitor; uptime (24h, 7/30/90 days), response times, settings, checks and incidents |
 | `/incidents` | Admin | Write incidents for the status page and post updates (investigating → resolved) |
 | `/maintenance` | Admin | Schedule maintenance windows |
-| `/alerts` | Admin | Alert channels: webhooks (Discord, Slack, ntfy.sh, JSON), Telegram, PagerDuty |
+| `/alerts` | Admin | Alert channels: webhooks (Discord, Slack, Teams, Google Chat, ntfy.sh, JSON), Telegram, PagerDuty, Pushover, Opsgenie, Twilio SMS, email |
+| `/reports` | Admin | Monthly uptime report per monitor; CSV download, prints to PDF |
+| `/settings` | Admin | Status page branding, custom domain, email subscribers, API keys |
 | `/status` | Anyone | Public status page with 90-day uptime bars |
 | `/status/feed.xml` | Anyone | RSS feed of incidents and maintenance |
 | `/status/badge/:id.svg` | Anyone | SVG badge for a public monitor; `?type=uptime&days=7\|30\|90` for uptime |
 | `/api/health/ping/:token` | Your jobs | Heartbeat ping (any method); append `/fail` to report a failure |
+| `/api/v1/*` | API clients | REST API and Prometheus metrics (API key or Access service token) |
 
 **Monitor types**
 - **HTTP(S)**: any method, custom headers and body. A check passes when the status is in the
   accepted list (`200`, `2xx`, `200-299, 301`), the body contains (or does not contain) a keyword,
   and a JSON path such as `$.status` exists or equals a value.
 - **TCP**: passes when a connection to `host:port` opens (Workers `connect()`; port 25 is blocked).
+- **DNS**: resolves an A, AAAA, CNAME, MX, TXT or NS record through Cloudflare DNS over HTTPS;
+  passes when it resolves and contains the expected values (optional).
 - **Heartbeat**: your cron job, backup or worker calls its private ping URL. If no ping arrives
   within the period plus the grace time, the monitor goes down. It stays pending until the first ping.
 
 **How a check works**
-1. A Cron Trigger fires every minute and checks every enabled monitor that is due.
+1. A Cron Trigger fires every minute and checks every enabled monitor that is due. When any monitor
+   uses a 30-second interval, the same invocation sweeps again half a minute later.
 2. A check that passes but takes longer than the "slow after" threshold is marked **degraded**.
 3. A new failure is re-checked from three other Cloudflare regions (Durable Objects pinned with
    location hints, `PROBE_REGIONS`, default `enam,weur,apac`). The monitor fails only when most
@@ -68,6 +74,34 @@ An edge-native uptime monitoring service built with **Remix 3** and Sergio Xalam
    incident once it ends.
 6. Raw check results are kept for 30 days; daily totals (`monitor_daily_stats`, refreshed hourly)
    are kept for good and power the 7/30/90-day figures and status page bars.
+
+**Certificate and domain expiry** (HTTPS monitors)
+- Twice a day the Worker reads the certificate the server actually serves: it starts a TLS 1.2
+  handshake over a raw socket and parses the certificate, which TLS 1.2 sends unencrypted
+  (`node:tls` in Workers does not implement `getPeerCertificate()`). Servers that only accept TLS 1.3
+  are reported as such.
+- Once a day it looks up the domain's expiry through RDAP (rdap.org).
+- Alerts go out at the monitor's warning days (default 14), then 7, 3, 1 and 0 days left, once each,
+  and a "renewed" alert follows a renewal.
+
+**More alerting**
+- Optional slowness alerts when a monitor turns degraded, and when it is back to normal.
+- "Check from every region" on a monitor page shows the answer from each probe region.
+
+**Status page**
+- Branding (title, description, logo, accent colour, link, footer) on `/settings`.
+- Custom domain: add it to the Worker in the Cloudflare dashboard, then deploy with
+  `STATUS_HOSTNAME=status.example.com`. On that host `/` opens the status page and admin pages 404.
+- Email subscribers: visitors confirm their address, then get emails for outages of public monitors,
+  incidents and maintenance, with one-click unsubscribe. Needs a domain onboarded to Cloudflare Email
+  Sending; deploy with `MAIL_FROM=status@yourdomain.com` (adds the `EMAIL` binding).
+
+**REST API** (`/api/v1`)
+- `GET/POST /monitors`, `GET/PATCH/DELETE /monitors/:id` (`PATCH` takes `{"paused": true}` too),
+  `GET /incidents`, `GET /metrics` (Prometheus).
+- Authenticate with `Authorization: Bearer um_…` (create keys on `/settings`; only a hash is stored)
+  or an Access service token. For key-only clients, add `api/v1` to the public Access application's
+  paths so Access lets the request through; the Worker still requires the key.
 
 **Access** (Cloudflare Access)
 - The admin pages, `/api/mcp` and `/api/cron/sweep` sit behind a Cloudflare Access application.
@@ -105,13 +139,13 @@ uptime-monitor/
 │   ├── http/
 │   │   ├── context.ts    # Request context keys & helpers
 │   │   ├── controllers/  # Individual HTTP action controllers
-│   │   ├── render.ts     # HTML SSR renderer
-│   │   └── views/        # Component views (Dashboard, Detail, Layout)
+│   │   ├── pages.tsx     # Data loading for pages shared by several controllers
+│   │   └── views/        # Remix components rendered with ctx.render(); RSS feed and badges use remix/html-template
 │   ├── jobs/             # @sdxc/jobs definitions & handlers
 │   ├── mcp/              # MCP Server tools & handler
 │   └── services/         # Checker, Alerting & Monitor business logic
 ├── bootstrap/
-│   ├── app.tsx           # Remix 3 Router setup with middleware
+│   ├── app.ts            # Remix 3 Router setup with middleware
 │   ├── logger.ts         # @sdxc/logger instance
 │   └── worker.ts         # Cloudflare Worker entry (fetch, scheduled, queue)
 ├── database/

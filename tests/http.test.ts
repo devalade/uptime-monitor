@@ -42,13 +42,14 @@ describe("admin pages render", () => {
 		const db = await createTestDatabase();
 		const http = await addMonitor(db, { name: "Website", keyword: "Welcome", requestHeaders: "X-Key: 1" });
 		const tcp = await addMonitor(db, { name: "Postgres", type: "tcp", url: "db.example.com:5432" });
+		await addMonitor(db, { name: "Mail DNS", type: "dns", url: "example.com", dnsRecordType: "MX" });
 		const heartbeat = await addMonitor(db, { name: "Backups", type: "heartbeat", url: "" });
 		await recordCheckOutcome(db, http, { status: "up", statusCode: 200, responseTimeMs: 120 });
 		await recordCheckOutcome(db, (await getMonitorById(db, http.id))!, { status: "down", statusCode: 500, responseTimeMs: 80, errorMessage: "boom" });
 		await createMaintenanceWindow(db, { title: "DB upgrade", startsAt: Date.now() - 1000, endsAt: Date.now() + 3_600_000, monitorIds: [tcp.id] });
 		const app = client(db);
 
-		for (const path of ["/", "/?filter=down", `/monitors/${http.id}`, `/monitors/${tcp.id}`, `/monitors/${heartbeat.id}`, "/maintenance", "/incidents", "/alerts", "/status"]) {
+		for (const path of ["/", "/?filter=down", `/monitors/${http.id}`, `/monitors/${tcp.id}`, `/monitors/${heartbeat.id}`, "/maintenance", "/incidents", "/alerts", "/reports", "/reports?month=2026-01", "/settings", "/status"]) {
 			const response = await app.get(path);
 			assert.equal(response.status, 200, path);
 			const html = await response.text();
@@ -72,7 +73,7 @@ describe("monitor forms", () => {
 		const created = await app.post("/monitors", { type: "heartbeat", name: "Cron", interval_seconds: "3600", grace_seconds: "600", is_public: "on" });
 		assert.equal(created.status, 303);
 		const [monitor] = await listMonitors(db);
-		assert.equal(created.headers.get("Location"), `${ORIGIN}/monitors/${monitor.id}`);
+		assert.equal(created.headers.get("Location"), `/monitors/${monitor.id}`);
 		assert.equal(monitor.type, "heartbeat");
 
 		const edited = await app.post(`/monitors/${monitor.id}`, {
@@ -210,5 +211,53 @@ describe("public endpoints", () => {
 		assert.match(xml, /<title>Website is down<\/title>/);
 		assert.match(xml, /<title>Maintenance: Upgrade &amp; cleanup<\/title>/);
 		assert.doesNotMatch(xml, /boom/, "raw failure details stay private");
+	});
+});
+
+describe("escaping and cross-origin protection", () => {
+	test("user-supplied text renders as text on every page", async () => {
+		const db = await createTestDatabase();
+		const evil = `<img src=x onerror="alert(1)">`;
+		const http = await addMonitor(db, { name: evil });
+		await recordCheckOutcome(db, http, { status: "down", statusCode: 500, responseTimeMs: 80, errorMessage: evil });
+		await createMaintenanceWindow(db, { title: evil, startsAt: Date.now() - 1000, endsAt: Date.now() + 3_600_000, monitorIds: null });
+		const app = client(db);
+
+		const ownMarkupEscaped = /&lt;(?:div|span|time|a|p|b|svg|option|label|input|item|title|details|section|form)\b/;
+		for (const path of ["/", `/monitors/${http.id}`, "/maintenance", "/reports", "/status", "/status/feed.xml"]) {
+			const body = await (await app.get(path)).text();
+			assert.ok(!body.includes("<img src=x"), `${path} renders the name as markup`);
+			assert.ok(body.includes("&lt;img src=x onerror="), `${path} shows the escaped name`);
+			assert.doesNotMatch(body, ownMarkupEscaped, `${path} escapes its own markup`);
+		}
+
+		const heartbeat = await addMonitor(db, { name: "Cron", type: "heartbeat", url: "" });
+		const pages = await Promise.all([
+			...["/?filter=down", `/monitors/${heartbeat.id}`, "/incidents", "/alerts", "/settings", "/status/unsubscribe/tok"].map((path) => app.get(path)),
+			app.post("/monitors", { url: "nope" }),
+			app.post(`/monitors/${http.id}`, { url: "nope" }),
+			app.post("/maintenance", { title: "" }),
+			app.post("/incidents", { title: "" }),
+			app.post("/alerts", { type: "webhook", url: "nope" }),
+			app.post("/settings/status-page", { logo_url: "http://insecure" }),
+		]);
+		for (const page of pages) assert.doesNotMatch(await page.text(), ownMarkupEscaped, page.url);
+	});
+
+	test("cross-site form posts are refused; heartbeat pings are not", async () => {
+		const db = await createTestDatabase();
+		const heartbeat = await addMonitor(db, { name: "Cron", type: "heartbeat", url: "" });
+		const app = client(db);
+		const crossSite = { "Sec-Fetch-Site": "cross-site", Origin: "https://evil.example" };
+
+		const forged = await app.request("/monitors", { method: "POST", headers: crossSite, body: new URLSearchParams({ url: "https://a.test" }) });
+		assert.equal(forged.status, 403);
+		assert.equal((await listMonitors(db)).length, 1, "nothing was created");
+
+		const sameOrigin = await app.request("/monitors", { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" }, body: new URLSearchParams({ url: "https://a.test" }) });
+		assert.equal(sameOrigin.status, 303);
+
+		const ping = await app.request(`/api/health/ping/${heartbeat.heartbeat_token}`, { method: "POST", headers: crossSite });
+		assert.equal(ping.status, 200);
 	});
 });

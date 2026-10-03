@@ -8,13 +8,15 @@
  */
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRedirectResponse } from "remix/response/redirect";
 import type { Middleware } from "remix/router";
 import webRoutes from "~/routes/web";
 import apiRoutes from "~/routes/api";
 
 /**
- * The status page with its feed and badges, the health check and heartbeat pings are public.
- * They all sit under /status and /api/health, the paths the public Access application bypasses.
+ * The status page with its feed, badges and subscription links, the health check and heartbeat
+ * pings are public. They all sit under /status and /api/health, the paths the public Access
+ * application bypasses.
  */
 const publicExactPaths = new Set([webRoutes.status.href(), apiRoutes.healthcheck.href()]);
 const publicPathPrefixes = [`${webRoutes.status.href()}/`, `${apiRoutes.healthcheck.href()}/ping/`];
@@ -32,9 +34,16 @@ export interface AccessSettings {
 	audience: string;
 }
 
+/** The REST API also accepts API keys (Authorization: Bearer um_…) instead of an Access token. */
+const apiKeyPathPrefix = "/api/v1/";
+
 export interface AdminAuthOptions {
 	/** Without Access settings, localhost stays open for development and every other host is locked. */
 	access?: AccessSettings;
+	/** A custom domain that only serves the public pages; "/" there opens the status page. */
+	statusHostname?: string;
+	/** Checks a REST API key. */
+	verifyApiKey?: (key: string) => Promise<boolean>;
 }
 
 /** One key set per team, cached across requests in this isolate. */
@@ -42,9 +51,22 @@ const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 export function adminAuth(options: AdminAuthOptions): Middleware {
 	return async (ctx, next) => {
-		const url = new URL(ctx.request.url);
+		const url = ctx.url;
+
+		if (options.statusHostname && url.hostname === options.statusHostname.toLowerCase()) {
+			if (url.pathname === "/") return createRedirectResponse(`${url.origin}${webRoutes.status.href()}`, 302);
+			return isPublicPath(url.pathname) ? next() : new Response("Not found", { status: 404 });
+		}
+
 		if (isPublicPath(url.pathname)) {
 			return next();
+		}
+
+		const bearer = ctx.request.headers.get("Authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+		if (url.pathname.startsWith(apiKeyPathPrefix) && bearer && options.verifyApiKey) {
+			return (await options.verifyApiKey(bearer))
+				? next()
+				: Response.json({ error: "Invalid or revoked API key" }, { status: 401 });
 		}
 
 		if (!options.access) {

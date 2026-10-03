@@ -2,7 +2,7 @@
  * Shields-style SVG badges for READMEs and websites: current status or uptime of one monitor.
  */
 
-import { escapeHtml } from "~/app/http/views/html";
+import { html, type SafeHtml } from "remix/html-template";
 
 const colors = {
 	green: "#3fb950",
@@ -21,14 +21,14 @@ function textWidth(text: string): number {
 	return Math.ceil(width);
 }
 
-export function renderBadge(label: string, message: string, color: BadgeColor): string {
+export function renderBadge(label: string, message: string, color: BadgeColor): SafeHtml {
 	const labelWidth = textWidth(label) + 12;
 	const messageWidth = textWidth(message) + 12;
 	const width = labelWidth + messageWidth;
-	const safeLabel = escapeHtml(label);
-	const safeMessage = escapeHtml(message);
+	const safeLabel = label;
+	const safeMessage = message;
 
-	return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" role="img" aria-label="${safeLabel}: ${safeMessage}">
+	return html`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" role="img" aria-label="${safeLabel}: ${safeMessage}">
 <title>${safeLabel}: ${safeMessage}</title>
 <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
 <clipPath id="r"><rect width="${width}" height="20" rx="3" fill="#fff"/></clipPath>

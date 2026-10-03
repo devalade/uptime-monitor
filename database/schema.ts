@@ -15,9 +15,12 @@ export type MonitorStatus = (typeof monitorStatuses)[number];
 export const httpMethods = ["HEAD", "GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 export type HttpMethod = (typeof httpMethods)[number];
 
-/** http probes a URL, tcp opens a socket to host:port, heartbeat waits for the job to ping us. */
-export const monitorTypes = ["http", "tcp", "heartbeat"] as const;
+/** http probes a URL, tcp opens a socket to host:port, dns resolves a record, heartbeat waits for the job to ping us. */
+export const monitorTypes = ["http", "tcp", "dns", "heartbeat"] as const;
 export type MonitorType = (typeof monitorTypes)[number];
+
+export const dnsRecordTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"] as const;
+export type DnsRecordType = (typeof dnsRecordTypes)[number];
 
 export const keywordModes = ["contains", "not_contains"] as const;
 export type KeywordMode = (typeof keywordModes)[number];
@@ -31,7 +34,7 @@ export const monitors = table({
 		updated_at: c.integer(),
 		name: c.text(),
 		type: c.enum(monitorTypes).default("http"),
-		/** The URL for http monitors, "host:port" for tcp, empty for heartbeats. */
+		/** The URL for http monitors, "host:port" for tcp, the hostname for dns, empty for heartbeats. */
 		url: c.text(),
 		method: c.enum(httpMethods).default("HEAD"),
 		/** Accepted status codes, e.g. "200", "2xx" or "200-299, 301". */
@@ -55,6 +58,24 @@ export const monitors = table({
 		reminder_minutes: c.integer().default(0),
 		/** JSON array of alert channel ids; null sends to every channel. */
 		alert_channel_ids: c.text().nullable(),
+		dns_record_type: c.enum(dnsRecordTypes).default("A"),
+		/** Comma-separated values the DNS answer must contain; empty means any answer. */
+		dns_expected: c.text().nullable(),
+		/** Warn this many days before the certificate or domain expires; 0 is off. */
+		expiry_warning_days: c.integer().default(14),
+		cert_expires_at: c.integer().nullable(),
+		cert_issuer: c.text().nullable(),
+		cert_error: c.text().nullable(),
+		cert_checked_at: c.integer().nullable(),
+		/** Smallest "days left" milestone already alerted for the current certificate. */
+		cert_warned_days: c.integer().nullable(),
+		domain_expires_at: c.integer().nullable(),
+		domain_checked_at: c.integer().nullable(),
+		domain_warned_days: c.integer().nullable(),
+		/** Alert when the monitor turns slow and when it is back to normal. */
+		alert_on_degraded: c.boolean().default(false),
+		/** JSON snapshot of the latest result from every region. */
+		region_results: c.text().nullable(),
 		interval_seconds: c.integer().default(60),
 		timeout_seconds: c.integer().default(10),
 		degraded_after_ms: c.integer().default(3000),
@@ -179,7 +200,7 @@ export const statusPostUpdates = table({
 
 export type SelectStatusPostUpdate = TableRow<typeof statusPostUpdates>;
 
-export const alertChannelTypes = ["webhook", "telegram", "pagerduty"] as const;
+export const alertChannelTypes = ["webhook", "telegram", "pagerduty", "pushover", "opsgenie", "twilio", "email"] as const;
 export type AlertChannelType = (typeof alertChannelTypes)[number];
 
 export const alertChannels = table({
@@ -198,3 +219,46 @@ export const alertChannels = table({
 });
 
 export type SelectAlertChannel = TableRow<typeof alertChannels>;
+
+export const settings = table({
+	name: "settings",
+	primaryKey: "key",
+	columns: {
+		key: c.text().primaryKey(),
+		value: c.text(),
+		updated_at: c.integer(),
+	},
+});
+
+export const statusSubscribers = table({
+	name: "status_subscribers",
+	timestamps: { createdAt: "created_at" },
+	columns: {
+		id: c.text().primaryKey(),
+		created_at: c.integer(),
+		email: c.text(),
+		/** Secret used in the confirm and unsubscribe links. */
+		token: c.text(),
+		confirmed_at: c.integer().nullable(),
+		confirmation_sent_at: c.integer().nullable(),
+	},
+});
+
+export type SelectStatusSubscriber = TableRow<typeof statusSubscribers>;
+
+export const apiKeys = table({
+	name: "api_keys",
+	timestamps: { createdAt: "created_at" },
+	columns: {
+		id: c.text().primaryKey(),
+		created_at: c.integer(),
+		name: c.text(),
+		/** First characters of the key, to recognise it in the list. */
+		prefix: c.text(),
+		/** SHA-256 of the key, hex. */
+		key_hash: c.text(),
+		last_used_at: c.integer().nullable(),
+	},
+});
+
+export type SelectApiKey = TableRow<typeof apiKeys>;

@@ -18,80 +18,13 @@ import {
 } from "~/app/services/monitor-service";
 import type { AlertSettings } from "~/app/services/alerting";
 import { createMaintenanceWindow, parseMaintenanceInput } from "~/app/services/maintenance";
-import { parseMonitorInput, settingsToFormValues, type MonitorFormValues } from "~/app/services/monitor-input";
+import { parseMonitorChanges, parseNewMonitor, summarizeMonitor } from "~/app/services/monitor-api";
 import type { RegionalProbes } from "~/app/services/regional-probes";
 import { addStatusPostUpdate, createStatusPost, parseStatusPostInput, parseStatusPostUpdate } from "~/app/services/status-posts";
 import { getUptimeReport } from "~/app/services/uptime-stats";
-import type { SelectMonitor } from "~/database/schema";
+import { announceMaintenance, announceStatusPost } from "~/app/services/announcements";
 import toolset from "~/app/mcp/tools";
 import apiRoutes from "~/routes/api";
-
-/** Monitor settings as the create_monitor and update_monitor tools take them. */
-interface MonitorToolInput {
-	name?: string;
-	type?: string;
-	url?: string;
-	method?: string;
-	expectedStatuses?: string;
-	requestHeaders?: string;
-	requestBody?: string;
-	keyword?: string;
-	keywordMode?: string;
-	jsonPath?: string;
-	jsonExpected?: string;
-	intervalSeconds?: number;
-	timeoutSeconds?: number;
-	degradedAfterMs?: number;
-	graceSeconds?: number;
-	failureThreshold?: number;
-	reminderMinutes?: number;
-	isPublic?: boolean;
-}
-
-/** Lays the tool input over existing form values, so the form validation applies to tools too. */
-function toFormValues(input: MonitorToolInput, base: MonitorFormValues = {}): MonitorFormValues {
-	const values: MonitorFormValues = { alert_mode: "all", ...base };
-	const set = (field: keyof MonitorFormValues, value: string | number | boolean | undefined) => {
-		if (value !== undefined) values[field] = String(value);
-	};
-	set("name", input.name);
-	set("type", input.type);
-	set("method", input.method);
-	set("expected_statuses", input.expectedStatuses);
-	set("request_headers", input.requestHeaders);
-	set("request_body", input.requestBody);
-	set("keyword", input.keyword);
-	set("keyword_mode", input.keywordMode);
-	set("json_path", input.jsonPath);
-	set("json_expected", input.jsonExpected);
-	set("interval_seconds", input.intervalSeconds);
-	set("timeout_seconds", input.timeoutSeconds);
-	set("degraded_after_ms", input.degradedAfterMs);
-	set("grace_seconds", input.graceSeconds);
-	set("failure_threshold", input.failureThreshold);
-	set("reminder_minutes", input.reminderMinutes);
-	if (input.isPublic !== undefined) values.is_public = input.isPublic ? "on" : "";
-	if (input.url !== undefined) {
-		values.url = input.url;
-		values.tcp_target = input.url;
-	}
-	return values;
-}
-
-function summarizeMonitor(m: SelectMonitor) {
-	return {
-		id: m.id,
-		name: m.name,
-		type: m.type,
-		target: m.type === "heartbeat" ? null : m.url,
-		method: m.type === "http" ? m.method : undefined,
-		status: m.is_enabled ? (m.last_status ?? "pending") : "paused",
-		lastCheckedAt: m.last_checked_at ? new Date(m.last_checked_at).toISOString() : null,
-		lastResponseTimeMs: m.last_response_time_ms,
-		isEnabled: m.is_enabled,
-		isPublic: m.is_public,
-	};
-}
 
 export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings, probes?: RegionalProbes, origin?: string) {
 	const mcp = createHandler({
@@ -180,7 +113,7 @@ export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings, 
 	mcp.tools.map(
 		toolset.createMonitor,
 		createTool(toolset.createMonitor, async (ctx) => {
-			const input = parseMonitorInput(toFormValues(ctx.input));
+			const input = parseNewMonitor(ctx.input);
 			if (!input.ok) {
 				return { success: false, errors: input.errors };
 			}
@@ -206,7 +139,7 @@ export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings, 
 				return { success: false, error: `Monitor ${ctx.input.id} not found` };
 			}
 
-			const input = parseMonitorInput(toFormValues(ctx.input, settingsToFormValues(monitorSettings(monitor))));
+			const input = parseMonitorChanges(monitor, ctx.input);
 			if (!input.ok) {
 				return { success: false, errors: input.errors };
 			}
@@ -259,12 +192,15 @@ export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings, 
 				const update = parseStatusPostUpdate({ status, message });
 				if (!update.ok) return { success: false, errors: update.errors };
 				const post = await addStatusPostUpdate(db, postId, update.value);
-				return post ? { success: true, postId: post.id, status: post.status } : { success: false, error: `Status post ${postId} not found` };
+				if (!post) return { success: false, error: `Status post ${postId} not found` };
+				await announceStatusPost(db, alerts, post, update.value);
+				return { success: true, postId: post.id, status: post.status };
 			}
 
 			const input = parseStatusPostInput({ title: title ?? "", impact: impact ?? "minor", status, message });
 			if (!input.ok) return { success: false, errors: input.errors };
 			const post = await createStatusPost(db, input.value);
+			await announceStatusPost(db, alerts, post, input.value);
 			return { success: true, postId: post.id, status: post.status };
 		}),
 	);
@@ -291,6 +227,7 @@ export function createUptimeMcpHandler(db: AppDatabase, alerts?: AlertSettings, 
 			if (!input.ok) return { success: false, errors: input.errors };
 
 			const window = await createMaintenanceWindow(db, input.value);
+			await announceMaintenance(db, alerts, window);
 			return {
 				success: true,
 				maintenance: {

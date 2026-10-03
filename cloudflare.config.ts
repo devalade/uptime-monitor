@@ -11,6 +11,14 @@ export default defineConfig({
 		compatibilityDate: "2026-10-01",
 		compatibilityFlags: ["nodejs_compat"],
 
+		// The admin dashboard, MCP and the Access applications live on workers.dev; keep it on
+		// when a custom domain is added (adding one turns workers.dev off by default).
+		workersDev: true,
+		previewUrls: false,
+
+		// Custom domain for the public status page; admin pages return 404 there.
+		...(process.env.STATUS_HOSTNAME ? { domains: [process.env.STATUS_HOSTNAME] } : {}),
+
 		// Regional probes: failures are re-checked from other regions before anyone is paged.
 		exports: {
 			RegionalProbe: exports.durableObject({ storage: "sqlite" }),
@@ -41,11 +49,12 @@ export default defineConfig({
 						ACCESS_AUD: bindings.text(process.env.ACCESS_AUD),
 					}
 				: {}),
-			// Alerts are sent only when a recipient is configured. The address must be a verified
-			// destination in Cloudflare Email Routing.
-			...(process.env.ALERT_EMAIL
-				? { ALERT_EMAIL: bindings.text(process.env.ALERT_EMAIL), EMAIL: bindings.sendEmail() }
-				: {}),
+			// Email (alert channels, ALERT_EMAIL, status page subscribers) needs a sender on a domain
+			// onboarded to Cloudflare Email Sending: deploy with MAIL_FROM=status@yourdomain.com.
+			...(process.env.MAIL_FROM || process.env.ALERT_EMAIL ? { EMAIL: bindings.sendEmail() } : {}),
+			...(process.env.ALERT_EMAIL ? { ALERT_EMAIL: bindings.text(process.env.ALERT_EMAIL) } : {}),
+			// A custom domain that serves only the public status page.
+			...(process.env.STATUS_HOSTNAME ? { STATUS_HOSTNAME: bindings.text(process.env.STATUS_HOSTNAME) } : {}),
 		},
 
 		triggers: [

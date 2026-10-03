@@ -3,7 +3,7 @@
  * checks, and maintenance windows. Lets users follow the status page from a feed reader.
  */
 
-import { escapeHtml } from "~/app/http/views/html";
+import { html, type SafeHtml } from "remix/html-template";
 import type { PublicStatusData } from "~/app/services/monitor-service";
 import { statusPostStatusLabels } from "~/app/services/status-posts";
 
@@ -14,7 +14,7 @@ interface FeedItem {
 	publishedAt: number;
 }
 
-export function renderStatusFeed(data: PublicStatusData, statusPageUrl: string): string {
+export function renderStatusFeed(data: PublicStatusData, statusPageUrl: string, title = "System status"): SafeHtml {
 	const items: FeedItem[] = [
 		...[...data.activePosts, ...data.pastPosts].map((post) => ({
 			guid: `post-${post.id}-${post.updates.length}`,
@@ -38,26 +38,25 @@ export function renderStatusFeed(data: PublicStatusData, statusPageUrl: string):
 		})),
 	].sort((a, b) => b.publishedAt - a.publishedAt);
 
-	return `<?xml version="1.0" encoding="UTF-8"?>
+	return html`<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
-<title>System status</title>
-<link>${escapeHtml(statusPageUrl)}</link>
-<atom:link href="${escapeHtml(`${statusPageUrl}/feed.xml`)}" rel="self" type="application/rss+xml" />
-<description>${escapeHtml(data.systemStatusTitle)}</description>
+<title>${title}</title>
+<link>${statusPageUrl}</link>
+<atom:link href="${`${statusPageUrl}/feed.xml`}" rel="self" type="application/rss+xml" />
+<description>${data.systemStatusTitle}</description>
 <lastBuildDate>${new Date(data.generatedAt).toUTCString()}</lastBuildDate>
 <ttl>5</ttl>
 ${items
 	.map(
-		(item) => `<item>
-<title>${escapeHtml(item.title)}</title>
-<link>${escapeHtml(statusPageUrl)}</link>
-<guid isPermaLink="false">${escapeHtml(item.guid)}</guid>
+		(item) => html`<item>
+<title>${item.title}</title>
+<link>${statusPageUrl}</link>
+<guid isPermaLink="false">${item.guid}</guid>
 <pubDate>${new Date(item.publishedAt).toUTCString()}</pubDate>
-<description>${escapeHtml(item.description)}</description>
+<description>${item.description}</description>
 </item>`,
-	)
-	.join("\n")}
+	)}
 </channel>
 </rss>`;
 }

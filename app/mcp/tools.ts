@@ -12,11 +12,11 @@ const id = (description: string) => s.string().pipe(checks.minLength(1)).meta({ 
 
 /** Settings shared by create_monitor and update_monitor; every one is optional on update. */
 const monitorSettingFields = {
-	type: s.optional(s.enum_(["http", "tcp", "heartbeat"])).meta({
-		description: "http requests a URL, tcp opens a connection to host:port, heartbeat waits for your job to ping a URL.",
+	type: s.optional(s.enum_(["http", "tcp", "dns", "heartbeat"])).meta({
+		description: "http requests a URL, tcp opens a connection to host:port, dns resolves a record, heartbeat waits for your job to ping a URL.",
 	}),
 	url: s.optional(s.string().pipe(checks.maxLength(500))).meta({
-		description: "For http: the full URL (e.g. 'https://api.example.com/health'). For tcp: 'host:port'. Not used by heartbeats.",
+		description: "For http: the full URL (e.g. 'https://api.example.com/health'). For tcp: 'host:port'. For dns: the domain name. Not used by heartbeats.",
 	}),
 	method: s.optional(s.enum_(["HEAD", "GET", "POST", "PUT", "PATCH", "DELETE"])).meta({
 		description: "HTTP method (default: GET).",
@@ -30,14 +30,18 @@ const monitorSettingFields = {
 	keywordMode: s.optional(s.enum_(["contains", "not_contains"])).meta({ description: "Whether the keyword must be present (default) or absent." }),
 	jsonPath: s.optional(s.string()).meta({ description: "Path into a JSON response, e.g. '$.status'." }),
 	jsonExpected: s.optional(s.string()).meta({ description: "Value jsonPath must equal; empty means it only has to exist." }),
+	dnsRecordType: s.optional(s.enum_(["A", "AAAA", "CNAME", "MX", "TXT", "NS"])).meta({ description: "DNS monitors: record type to resolve (default: A)." }),
+	dnsExpected: s.optional(s.string()).meta({ description: "DNS monitors: comma-separated values the answer must contain; empty accepts any answer." }),
 	intervalSeconds: s.optional(s.number()).meta({
-		description: "Check frequency in seconds, 60 to 86400; for heartbeats, the expected ping period, up to 30 days (default: 60).",
+		description: "Check frequency in seconds, 30 to 86400; for heartbeats, the expected ping period, 60 seconds to 30 days (default: 60).",
 	}),
 	timeoutSeconds: s.optional(s.number()).meta({ description: "Timeout in seconds before a check fails, 1 to 30 (default: 10)." }),
 	degradedAfterMs: s.optional(s.number()).meta({ description: "Responses slower than this many ms are marked degraded (default: 3000)." }),
 	graceSeconds: s.optional(s.number()).meta({ description: "Heartbeats: how late a ping may be, 60 to 86400 seconds (default: 300)." }),
 	failureThreshold: s.optional(s.number()).meta({ description: "Failed checks in a row before the monitor goes down, 1 to 10 (default: 1)." }),
 	reminderMinutes: s.optional(s.number()).meta({ description: "Repeat the DOWN alert every N minutes while down; 0 turns reminders off (default: 0)." }),
+	expiryWarningDays: s.optional(s.number()).meta({ description: "HTTPS monitors: warn this many days before the certificate or domain expires, 0 to 90; 0 is off (default: 14)." }),
+	alertOnDegraded: s.optional(s.boolean()).meta({ description: "Also alert when the monitor turns slow and when it is back to normal (default: false)." }),
 	isPublic: s.optional(s.boolean()).meta({ description: "Whether the monitor appears on the public status page (default: true)." }),
 };
 

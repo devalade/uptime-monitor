@@ -12,6 +12,7 @@ import { createCache } from "~/app/contracts/cache";
 import { createAlertSettings } from "~/app/contracts/alerts";
 import { createAppJobDispatcher } from "~/app/jobs/dispatcher";
 import { createRegionalProbes, parseProbeRegions, type ProbeNamespace } from "~/app/services/regional-probes";
+import { hasSubMinuteMonitors, runSweep } from "~/app/services/monitor-service";
 import application from "~/bootstrap/app";
 
 export { RegionalProbe } from "~/app/probes/regional-probe";
@@ -29,6 +30,8 @@ export interface Env {
 	ALERT_WEBHOOK_URL?: string;
 	ACCESS_TEAM_DOMAIN?: string;
 	ACCESS_AUD?: string;
+	/** A custom domain that serves only the public status page, e.g. "status.example.com". */
+	STATUS_HOSTNAME?: string;
 	APP_ENV?: string;
 	APP_URL?: string;
 }
@@ -50,6 +53,7 @@ export default {
 			cache,
 			alerts: createAlertSettings(env),
 			probes: createProbes(env),
+			statusHostname: env.STATUS_HOSTNAME,
 			access:
 				env.ACCESS_TEAM_DOMAIN && env.ACCESS_AUD
 					? { teamDomain: env.ACCESS_TEAM_DOMAIN, audience: env.ACCESS_AUD }
@@ -65,15 +69,10 @@ export default {
 	async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		const db = env.DB ? createAppDatabase(env.DB) : createMemoryDatabase();
 
+		const alerts = createAlertSettings(env);
+		const probes = createProbes(env);
 		const queue = createMemoryQueue();
-		const dispatcher = createAppJobDispatcher(
-			{
-				db,
-				alerts: createAlertSettings(env),
-				probes: createProbes(env),
-			},
-			queue,
-		);
+		const dispatcher = createAppJobDispatcher({ db, alerts, probes }, queue);
 
 		const handlers = cloudflare.worker(dispatcher);
 		await handlers.scheduled(controller);
@@ -81,5 +80,12 @@ export default {
 		// tick() only enqueues due jobs. No Cloudflare Queue is bound, so run them here,
 		// inside this cron invocation, or they vanish with the in-memory queue.
 		await queue.drain((delivery) => dispatcher.deliver(delivery));
+
+		// Cron fires once a minute; 30-second monitors get a second sweep half a minute in.
+		if (await hasSubMinuteMonitors(db)) {
+			const wait = controller.scheduledTime + 30_000 - Date.now();
+			if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+			await runSweep(db, alerts, Date.now(), { probes, hourlyTasks: false });
+		}
 	},
 };

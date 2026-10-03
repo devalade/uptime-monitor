@@ -10,6 +10,6 @@ import apiRoutes from "~/routes/api";
 export default createAction(apiRoutes.mcp, async (ctx) => {
 	const db = ctx.db;
 
-	const mcp = createUptimeMcpHandler(db, ctx.alerts, ctx.probes, new URL(ctx.request.url).origin);
+	const mcp = createUptimeMcpHandler(db, ctx.alerts, ctx.probes, ctx.url.origin);
 	return mcp.fetch(ctx.request);
 });

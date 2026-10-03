@@ -3,14 +3,15 @@
  * Sends a sample alert to one channel and reports the result on the Alerts page.
  */
 
+import { createRedirectResponse } from "remix/response/redirect";
 import { createAction } from "remix/router";
 import { getAlertChannel } from "~/app/services/alert-channels";
 import { sendAlert, testAlertPayload } from "~/app/services/alerting";
 import routes from "~/routes/web";
 
 export default createAction(routes.testAlertChannel, async (ctx) => {
-	const origin = new URL(ctx.request.url).origin;
-	const channel = await getAlertChannel(ctx.db, ctx.params.id);
+	const origin = ctx.url.origin;
+	const channel = await getAlertChannel(ctx.db, ctx.params.id, ctx.alerts);
 	if (!channel) {
 		return new Response("Channel not found or incomplete", { status: 404 });
 	}
@@ -24,5 +25,5 @@ export default createAction(routes.testAlertChannel, async (ctx) => {
 		target.searchParams.set("notice", "failed");
 		target.searchParams.set("detail", `${delivery.channel}: ${delivery.error}`);
 	}
-	return Response.redirect(target.toString(), 303);
+	return createRedirectResponse(target, 303);
 });

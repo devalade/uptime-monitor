@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "cf dev",
 		"build": "vite build",
-		"deploy": "ACCESS_TEAM_DOMAIN=devalade.cloudflareaccess.com ACCESS_AUD=899803d362ad7f54225f831f2e355da7af538b07b5b3a011c0434047c4dac996 cf deploy",
+		"deploy": "APP_URL=${APP_URL:-https://uptime-monitor.devalade.workers.dev} STATUS_HOSTNAME=${STATUS_HOSTNAME:-uptime-monitor.devalade.me} ACCESS_TEAM_DOMAIN=devalade.cloudflareaccess.com ACCESS_AUD=899803d362ad7f54225f831f2e355da7af538b07b5b3a011c0434047c4dac996 cf deploy",
 		"typecheck": "tsc --noEmit",
 		"test": "node --import tsx --test 'tests/**/*.test.ts'",
 		"db:local:migrate": "wrangler d1 migrations apply uptime-db --local",

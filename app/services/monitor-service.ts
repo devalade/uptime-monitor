@@ -8,6 +8,8 @@ import { parseHeaderLines, runProbe, type CheckOutcome, type ProbeRequest } from
 import { notifyMonitor, type AlertSettings, type IncidentAlertPayload } from "~/app/services/alerting";
 import { isUnderMaintenance, listActiveMaintenance, listCurrentAndUpcomingMaintenance, windowCoversMonitor } from "~/app/services/maintenance";
 import { regionLabel, type RegionalProbes } from "~/app/services/regional-probes";
+import { runExpiryChecks } from "~/app/services/expiry";
+import { notifySubscribers, pruneUnconfirmedSubscribers } from "~/app/services/subscribers";
 import { listPublicStatusPosts, type PublicStatusPost } from "~/app/services/status-posts";
 import { DAY_MS, getDailyUptime, overallUptime, refreshDailyStats, startOfUtcDay, type DailyUptime } from "~/app/services/uptime-stats";
 import {
@@ -17,6 +19,7 @@ import {
 	type SelectMonitor,
 	type SelectMonitorResult,
 	type SelectIncident,
+	type DnsRecordType,
 	type HttpMethod,
 	type KeywordMode,
 	type MonitorStatus,
@@ -37,7 +40,7 @@ const CONFIRM_FAILURE_DELAY_MS = 2000;
 export interface MonitorSettings {
 	type: MonitorType;
 	name: string;
-	/** URL for http, "host:port" for tcp, empty for heartbeat. */
+	/** URL for http, "host:port" for tcp, hostname for dns, empty for heartbeat. */
 	url: string;
 	method: HttpMethod;
 	expectedStatuses: string;
@@ -47,6 +50,8 @@ export interface MonitorSettings {
 	keywordMode: KeywordMode;
 	jsonPath: string | null;
 	jsonExpected: string | null;
+	dnsRecordType: DnsRecordType;
+	dnsExpected: string | null;
 	intervalSeconds: number;
 	timeoutSeconds: number;
 	degradedAfterMs: number;
@@ -55,6 +60,9 @@ export interface MonitorSettings {
 	reminderMinutes: number;
 	/** null alerts every channel. */
 	alertChannelIds: string[] | null;
+	/** Days before certificate / domain expiry to warn; 0 is off. */
+	expiryWarningDays: number;
+	alertOnDegraded: boolean;
 	isPublic: boolean;
 }
 
@@ -70,6 +78,8 @@ export const defaultMonitorSettings: Omit<MonitorSettings, "name" | "url"> = {
 	keywordMode: "contains",
 	jsonPath: null,
 	jsonExpected: null,
+	dnsRecordType: "A",
+	dnsExpected: null,
 	intervalSeconds: 60,
 	timeoutSeconds: 10,
 	degradedAfterMs: 3000,
@@ -77,6 +87,8 @@ export const defaultMonitorSettings: Omit<MonitorSettings, "name" | "url"> = {
 	failureThreshold: 1,
 	reminderMinutes: 0,
 	alertChannelIds: null,
+	expiryWarningDays: 14,
+	alertOnDegraded: false,
 	isPublic: true,
 };
 
@@ -245,6 +257,10 @@ function settingsToColumns(settings: MonitorSettings) {
 		keyword_mode: settings.keywordMode,
 		json_path: settings.jsonPath,
 		json_expected: settings.jsonExpected,
+		dns_record_type: settings.dnsRecordType,
+		dns_expected: settings.dnsExpected,
+		expiry_warning_days: settings.expiryWarningDays,
+		alert_on_degraded: settings.alertOnDegraded,
 		interval_seconds: settings.intervalSeconds,
 		timeout_seconds: settings.timeoutSeconds,
 		degraded_after_ms: settings.degradedAfterMs,
@@ -277,6 +293,8 @@ export function monitorSettings(monitor: SelectMonitor): MonitorSettings {
 		keywordMode: monitor.keyword_mode,
 		jsonPath: monitor.json_path,
 		jsonExpected: monitor.json_expected,
+		dnsRecordType: monitor.dns_record_type,
+		dnsExpected: monitor.dns_expected,
 		intervalSeconds: monitor.interval_seconds,
 		timeoutSeconds: monitor.timeout_seconds,
 		degradedAfterMs: monitor.degraded_after_ms,
@@ -284,7 +302,9 @@ export function monitorSettings(monitor: SelectMonitor): MonitorSettings {
 		failureThreshold: monitor.failure_threshold,
 		reminderMinutes: monitor.reminder_minutes,
 		alertChannelIds,
-		isPublic: monitor.is_public,
+		expiryWarningDays: monitor.expiry_warning_days,
+		alertOnDegraded: Boolean(monitor.alert_on_degraded),
+		isPublic: Boolean(monitor.is_public),
 	};
 }
 
@@ -352,9 +372,25 @@ export async function findDueMonitors(db: AppDatabase, now: number = Date.now())
 	return due;
 }
 
+/** Whether any enabled monitor runs more often than once a minute. */
+export async function hasSubMinuteMonitors(db: AppDatabase): Promise<boolean> {
+	return (await db.count(monitors, { where: and(eq(monitors.is_enabled, true), lt(monitors.interval_seconds, 60)) })) > 0;
+}
+
 /** What to send to a probe for this monitor; heartbeats are never probed. */
 export function probeRequestFor(monitor: SelectMonitor): ProbeRequest | null {
 	if (monitor.type === "heartbeat") return null;
+
+	if (monitor.type === "dns") {
+		return {
+			type: "dns",
+			host: monitor.url,
+			recordType: monitor.dns_record_type,
+			expected: monitor.dns_expected,
+			timeoutSeconds: monitor.timeout_seconds,
+			degradedAfterMs: monitor.degraded_after_ms,
+		};
+	}
 
 	if (monitor.type === "tcp") {
 		const { host, port } = splitHostPort(monitor.url);
@@ -405,22 +441,100 @@ export async function checkMonitor(
 	if (!request) return checkHeartbeat(db, monitor, alerts);
 
 	let outcome = await runProbe(request);
+	let regions: RegionResult[] | undefined;
 
 	// Confirm a new failure before it opens an incident. During an outage that is
 	// already confirmed, every check counts as-is.
 	if (outcome.status === "down" && monitor.last_status !== "down") {
-		outcome = await confirmFailure(request, outcome, options);
+		const confirmation = await confirmFailure(request, outcome, options);
+		outcome = confirmation.outcome;
+		regions = confirmation.regions;
 	}
 
 	const recorded = await recordCheckOutcome(db, monitor, outcome, alerts);
+	if (regions) {
+		const updated = await saveRegionResults(db, recorded.monitor.id, regions);
+		return { ...recorded, monitor: updated, outcome };
+	}
 	return { ...recorded, outcome };
+}
+
+/** One location's answer, as shown on the monitor page. */
+export interface RegionResult {
+	region: string;
+	label: string;
+	status: CheckOutcome["status"] | "error";
+	responseTimeMs: number | null;
+	errorMessage?: string;
+}
+
+export interface RegionSnapshot {
+	checkedAt: number;
+	results: RegionResult[];
+}
+
+export function parseRegionSnapshot(json: string | null): RegionSnapshot | null {
+	if (!json) return null;
+	try {
+		const value = JSON.parse(json) as RegionSnapshot;
+		return Array.isArray(value.results) ? value : null;
+	} catch {
+		return null;
+	}
+}
+
+async function saveRegionResults(db: AppDatabase, monitorId: string, results: RegionResult[], now: number = Date.now()): Promise<SelectMonitor> {
+	const snapshot: RegionSnapshot = { checkedAt: now, results };
+	return db.update(monitors, monitorId, { region_results: JSON.stringify(snapshot), updated_at: now });
+}
+
+/**
+ * Probes a monitor from here and from every probe region, without changing its status.
+ * Returns null for heartbeats, which have nothing to probe.
+ */
+export async function checkFromAllRegions(
+	db: AppDatabase,
+	monitor: SelectMonitor,
+	probes: RegionalProbes | undefined,
+): Promise<RegionSnapshot | null> {
+	const request = probeRequestFor(monitor);
+	if (!request) return null;
+
+	const toResult = (region: string, label: string, outcome: CheckOutcome): RegionResult => ({
+		region,
+		label,
+		status: outcome.status,
+		responseTimeMs: outcome.responseTimeMs,
+		errorMessage: outcome.errorMessage,
+	});
+	const results = await Promise.all([
+		runProbe(request).then((outcome) => toResult("here", "This Worker", outcome)),
+		...(probes?.regions ?? []).map((region) =>
+			probes!.run(region, request).then(
+				(outcome) => toResult(region, regionLabel(region), outcome),
+				(error): RegionResult => ({
+					region,
+					label: regionLabel(region),
+					status: "error",
+					responseTimeMs: null,
+					errorMessage: error instanceof Error ? error.message : String(error),
+				}),
+			),
+		),
+	]);
+	const updated = await saveRegionResults(db, monitor.id, results);
+	return parseRegionSnapshot(updated.region_results);
 }
 
 /**
  * Re-checks a failure. With regional probes, the monitor is down only when most locations
  * (this one included) agree; otherwise it is re-checked from here after a short pause.
  */
-async function confirmFailure(request: ProbeRequest, first: CheckOutcome, options: CheckOptions): Promise<CheckOutcome> {
+async function confirmFailure(
+	request: ProbeRequest,
+	first: CheckOutcome,
+	options: CheckOptions,
+): Promise<{ outcome: CheckOutcome; regions?: RegionResult[] }> {
 	const probes = options.probes;
 	if (probes && probes.regions.length > 0) {
 		const answers = await Promise.all(
@@ -439,14 +553,27 @@ async function confirmFailure(request: ProbeRequest, first: CheckOutcome, option
 		const answered = answers.filter((answer) => answer !== null);
 
 		if (answered.length > 0) {
+			const regions: RegionResult[] = [
+				{ region: "here", label: "This Worker", status: first.status, responseTimeMs: first.responseTimeMs, errorMessage: first.errorMessage },
+				...answered.map((a) => ({
+					region: a.region,
+					label: regionLabel(a.region),
+					status: a.outcome.status,
+					responseTimeMs: a.outcome.responseTimeMs,
+					errorMessage: a.outcome.errorMessage,
+				})),
+			];
 			const failedRegions = answered.filter((a) => a.outcome.status === "down").map((a) => a.region);
 			const failures = 1 + failedRegions.length;
 			const total = 1 + answered.length;
 
 			if (failures * 2 > total) {
 				return {
-					...first,
-					errorMessage: `${first.errorMessage ?? "Check failed"} (confirmed from ${failedRegions.map(regionLabel).join(", ") || "here"})`,
+					regions,
+					outcome: {
+						...first,
+						errorMessage: `${first.errorMessage ?? "Check failed"} (confirmed from ${failedRegions.map(regionLabel).join(", ") || "here"})`,
+					},
 				};
 			}
 
@@ -455,13 +582,13 @@ async function confirmFailure(request: ProbeRequest, first: CheckOutcome, option
 				const log = logger.open("job", { region: passing.region, firstError: first.errorMessage });
 				log.note("Failure not confirmed by other regions");
 				log.emit();
-				return passing.outcome;
+				return { regions, outcome: passing.outcome };
 			}
 		}
 	}
 
 	await new Promise((resolve) => setTimeout(resolve, options.confirmFailureDelayMs ?? CONFIRM_FAILURE_DELAY_MS));
-	return runProbe(request);
+	return { outcome: await runProbe(request) };
 }
 
 /**
@@ -528,7 +655,10 @@ export async function runSweep(
 	db: AppDatabase,
 	alerts?: AlertSettings,
 	now: number = Date.now(),
-	options: CheckOptions = {},
+	options: CheckOptions & {
+		/** The half-minute sweep for 30-second monitors skips the hourly housekeeping. */
+		hourlyTasks?: boolean;
+	} = {},
 ): Promise<{ swept: number; failed: number }> {
 	const due = await findDueMonitors(db, now);
 	const log = logger.open("cron", { count: due.length });
@@ -547,10 +677,12 @@ export async function runSweep(
 		errLog.emit();
 	});
 
-	if (new Date(now).getUTCMinutes() === 0) {
+	if (options.hourlyTasks !== false && new Date(now).getUTCMinutes() === 0) {
 		// Yesterday is recomputed too, so its last hour is not lost when the day rolls over.
 		await refreshDailyStats(db, startOfUtcDay(now) - DAY_MS, now);
 		await db.deleteMany(monitorResults, { where: lt(monitorResults.created_at, now - RESULT_RETENTION_MS) });
+		await pruneUnconfirmedSubscribers(db, now);
+		await runExpiryChecks(db, alerts, now);
 	}
 
 	return {
@@ -624,6 +756,12 @@ export async function recordCheckOutcome(
 			);
 
 			await alert({ currentStatus: "down", reason: outcome.errorMessage ?? "Health check failed" });
+			if (monitor.is_public) {
+				await notifySubscribers(db, alerts, {
+					subject: `${monitor.name} is down`,
+					text: `${monitor.name} has not been responding as expected since ${new Date(now).toUTCString()}. We will email you again when it recovers.`,
+				});
+			}
 		} else if (openIncident && !inMaintenance && monitor.reminder_minutes > 0) {
 			const lastAlertedAt = openIncident.last_alerted_at ?? openIncident.started_at;
 			if (now - lastAlertedAt >= monitor.reminder_minutes * 60_000) {
@@ -648,6 +786,21 @@ export async function recordCheckOutcome(
 
 		if (resolved.affectedRows > 0) {
 			await alert({ currentStatus: outcome.status, reason: describeRecovery(monitor, outcome) });
+			if (monitor.is_public) {
+				await notifySubscribers(db, alerts, {
+					subject: `${monitor.name} has recovered`,
+					text: `${monitor.name} is responding normally again as of ${new Date(now).toUTCString()}.`,
+				});
+			}
+		}
+	}
+
+	// Optional alerts when a monitor turns slow, and when it is back to normal.
+	if (monitor.alert_on_degraded && !inMaintenance) {
+		if (currentStatus === "degraded" && previousStatus === "up") {
+			await alert({ currentStatus: "degraded", kind: "degraded", reason: outcome.errorMessage ?? "Responses are slower than usual" });
+		} else if (currentStatus === "up" && previousStatus === "degraded") {
+			await alert({ currentStatus: "up", kind: "normal", reason: `Responding in ${outcome.responseTimeMs}ms again` });
 		}
 	}
 
@@ -687,6 +840,7 @@ function nextDueAt(monitor: SelectMonitor, outcome: CheckOutcome, now: number): 
 function describeRecovery(monitor: SelectMonitor, outcome: CheckOutcome): string {
 	if (monitor.type === "heartbeat") return "A ping was received";
 	if (monitor.type === "tcp") return `Service recovered: connected in ${outcome.responseTimeMs}ms`;
+	if (monitor.type === "dns") return `The DNS record resolves as expected again (${outcome.responseTimeMs}ms)`;
 	return `Service recovered with HTTP ${outcome.statusCode} in ${outcome.responseTimeMs}ms`;
 }
 

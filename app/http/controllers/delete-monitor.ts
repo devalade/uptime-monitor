@@ -3,6 +3,7 @@
  * Deletes a monitor and cascades its results and incidents.
  */
 
+import { createRedirectResponse } from "remix/response/redirect";
 import { createAction } from "remix/router";
 import { deleteMonitor } from "~/app/services/monitor-service";
 import routes from "~/routes/web";
@@ -13,6 +14,5 @@ export default createAction(routes.deleteMonitor, async (ctx) => {
 
 	await deleteMonitor(db, id);
 
-	const origin = new URL(ctx.request.url).origin;
-	return Response.redirect(`${origin}/`, 303);
+	return createRedirectResponse(routes.home.href(), 303);
 });

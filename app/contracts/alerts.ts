@@ -12,8 +12,14 @@ export function createAlertSettings(env: {
 	MAIL_FROM?: string;
 	ALERT_EMAIL?: string;
 	ALERT_WEBHOOK_URL?: string;
+	APP_URL?: string;
 }): AlertSettings | undefined {
 	const settings: AlertSettings = {};
+
+	// Email needs the send_email binding and a sender on a domain onboarded to Email Sending.
+	if (env.EMAIL && env.MAIL_FROM) {
+		settings.mailer = { transport: new CloudflareTransport(env.EMAIL), from: env.MAIL_FROM };
+	}
 
 	if (env.EMAIL && env.ALERT_EMAIL) {
 		settings.email = {
@@ -27,5 +33,7 @@ export function createAlertSettings(env: {
 		settings.webhookUrl = env.ALERT_WEBHOOK_URL;
 	}
 
-	return settings.email || settings.webhookUrl ? settings : undefined;
+	if (!settings.email && !settings.webhookUrl && !settings.mailer) return undefined;
+	if (env.APP_URL?.startsWith("https://")) settings.publicUrl = env.APP_URL.replace(/\/+$/, "");
+	return settings;
 }
